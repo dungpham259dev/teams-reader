@@ -74,11 +74,11 @@ class _FakePage:
     def fill(self, selector, value):
         self.filled[selector] = value
 
-    def click(self, selector):
+    def click(self, selector, **kwargs):
         self.clicked.append(selector)
         self.screens.pop(0)
 
-    def press(self, selector, key):
+    def press(self, selector, key, **kwargs):
         self.click(selector)
 
     def text_of(self, selector):
@@ -132,9 +132,11 @@ def test_step_stops_on_login_error_instead_of_retrying_password():
 
 @pytest.mark.unit
 def test_second_password_screen_is_not_retried():
-    login = autologin.AutoLogin(autologin.Credentials("a", "b"), on_mfa=lambda n: None)
+    clock = _Clock()
+    login = _login(clock)
     page = _FakePage([("https://login.microsoftonline.com/x", {"ms_password"})] * 3)
     login.step(page, {"ms_password"}, page.text_of)
+    clock.now = 10.0
     with pytest.raises(autologin.LoginFailed, match="not retrying"):
         login.step(page, {"ms_password"}, page.text_of)
 
@@ -218,3 +220,107 @@ def test_rejected_email_error_shows_only_its_shape():
     with pytest.raises(autologin.LoginFailed) as err:
         login.step(page, {"ms_error"}, lambda s: "Enter a valid email address")
     assert "***@corp.example" in str(err.value) and "secret.name" not in str(err.value)
+
+
+@pytest.mark.unit
+def test_email_screen_wins_over_a_prefilled_hidden_password_field():
+    # Microsoft's email page also carries an off-screen passwd input.
+    state = autologin.detect_state("https://login.microsoftonline.com/x", {"ms_email", "ms_password", "ms_next"})
+    assert state == "email"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("box,shown", [
+    ({"x": 10, "y": 20, "width": 300, "height": 30}, True),
+    ({"x": -9999, "y": 20, "width": 300, "height": 30}, False),
+    ({"x": 10, "y": 20, "width": 0, "height": 0}, False),
+    (None, False),
+])
+def test_on_screen(box, shown):
+    assert autologin.on_screen(box) is shown
+
+
+class _Clock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
+class _StuckPage(_FakePage):
+    """A screen that does not advance when clicked (e.g. still loading)."""
+
+    def click(self, selector, **kwargs):
+        self.clicked.append(selector)
+
+
+def _login(clock):
+    return autologin.AutoLogin(autologin.Credentials("me@corp.example", "pw"), on_mfa=lambda n: None,
+                               clock=clock, cooldown=5.0)
+
+
+@pytest.mark.unit
+def test_same_screen_is_not_resubmitted_while_it_is_loading():
+    clock = _Clock()
+    page = _StuckPage([("https://login.microsoftonline.com/x", {"ms_email"})])
+    login = _login(clock)
+    login.step(page, {"ms_email"}, page.text_of)
+    clock.now = 2.0
+    assert login.step(page, {"ms_email"}, page.text_of) == "settling"
+    assert len(page.clicked) == 1
+
+
+@pytest.mark.unit
+def test_email_screen_that_never_advances_stops_with_the_page_error():
+    clock = _Clock()
+    page = _StuckPage([("https://login.microsoftonline.com/x", {"ms_email"})])
+    login = _login(clock)
+    login.step(page, {"ms_email"}, page.text_of)
+    clock.now = 10.0
+    login.step(page, {"ms_email"}, page.text_of)
+    clock.now = 20.0
+    with pytest.raises(autologin.LoginFailed, match="not accepted"):
+        login.step(page, {"ms_email"}, lambda s: "We couldn't find an account with that username.")
+    assert len(page.clicked) == 2
+
+
+@pytest.mark.unit
+def test_a_busy_button_is_retried_later_instead_of_crashing():
+    clock = _Clock()
+
+    class _BusyPage(_StuckPage):
+        busy = True
+
+        def click(self, selector, **kwargs):
+            if self.busy:
+                raise TimeoutError("element is not enabled")
+            super().click(selector)
+
+    page = _BusyPage([("https://login.microsoftonline.com/x", {"ms_email"})])
+    login = _login(clock)
+    assert login.step(page, {"ms_email"}, page.text_of) == "email"
+    page.busy = False
+    clock.now = 1.0  # a failed click starts no cooldown
+    login.step(page, {"ms_email"}, page.text_of)
+    assert page.clicked == [autologin.SELECTORS["ms_next"]]
+
+
+@pytest.mark.unit
+def test_account_type_picker_chooses_work_or_school():
+    ms = "https://login.microsoftonline.com/x"
+    assert autologin.detect_state(ms, {"pick_work"}) == "pick_work"
+    page = _FakePage([(ms, {"pick_work"}), (ms, {"ms_password"})])
+    login = autologin.AutoLogin(autologin.Credentials("a@b.c", "pw"), on_mfa=lambda n: None)
+    assert login.step(page, {"pick_work"}, page.text_of) == "pick_work"
+    assert page.clicked == [autologin.SELECTORS["pick_work"]]
+
+
+@pytest.mark.unit
+def test_failed_sign_in_navigation_is_explained():
+    message = autologin.navigation_failure_message(
+        "https://sts.corp.example/Trust/2005/UsernameMixed?x=1", "net::ERR_SOCKS_CONNECTION_FAILED")
+    assert "sts.corp.example" in message and "ERR_SOCKS_CONNECTION_FAILED" in message
+    assert "proxy" in message and "x=1" not in message
+    cert = autologin.navigation_failure_message("https://idp.corp.example/", "net::ERR_CERT_AUTHORITY_INVALID")
+    assert "certificate" in cert

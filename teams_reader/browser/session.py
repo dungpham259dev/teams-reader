@@ -116,7 +116,14 @@ def capture_request(
         elif chatsvc.is_conversations_url(url):
             captured.setdefault("conversations", req)
 
+    failed_navigation: dict[str, str] = {}
+
+    def on_request_failed(req: Any) -> None:
+        if req.is_navigation_request():
+            failed_navigation["url"], failed_navigation["error"] = req.url, str(req.failure)
+
     context.on("request", on_request)
+    context.on("requestfailed", on_request_failed)
     page = _page_for(context)
     start = time.monotonic()
     last_reload_ms = 0.0
@@ -144,6 +151,10 @@ def capture_request(
                     f"{_fail_screenshot()}. Log in in the window, or re-run "
                     f"`teams-reader login`.{where}"
                 )
+            if page.url.startswith("chrome-error://") and failed_navigation:
+                raise autologin_mod.LoginFailed(
+                    autologin_mod.navigation_failure_message(failed_navigation["url"], failed_navigation["error"])
+                )
             if autologin_mod.on_login_page(page.url):
                 if require_session:
                     raise LoginRequired(
@@ -157,6 +168,7 @@ def capture_request(
             page.wait_for_timeout(1_000)
     finally:
         context.remove_listener("request", on_request)
+        context.remove_listener("requestfailed", on_request_failed)
 
     if "messages" in captured:
         request = captured["messages"]
