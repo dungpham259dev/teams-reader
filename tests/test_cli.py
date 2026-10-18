@@ -189,3 +189,20 @@ def test_config_command_prints_profile(capsys):
     assert cli.main(["config"]) == 0
     out = capsys.readouterr().out
     assert "profile: default" in out and "proxy: direct" in out
+
+
+@pytest.mark.unit
+def test_register_replaces_an_existing_server_only_when_confirmed(monkeypatch):
+    ran = []
+    monkeypatch.setattr(cli.subprocess, "call", lambda cmd, **kw: ran.append(cmd) or 0)
+    cmd = ["claude", "mcp", "add", "--scope", "user", "teams-reader", "--", "/x/teams-reader", "mcp"]
+
+    cli._register_mcp(cmd, ask=lambda p: "n", exists=lambda name: True)
+    assert ran == []  # kept the existing registration
+
+    cli._register_mcp(cmd, ask=lambda p: "y", exists=lambda name: True)
+    assert ran == [["claude", "mcp", "remove", "--scope", "user", "teams-reader"], cmd]
+
+    ran.clear()
+    cli._register_mcp(cmd, ask=lambda p: "", exists=lambda name: False)
+    assert ran == [cmd]

@@ -96,18 +96,32 @@ Try it safely in a throwaway profile: `venv/bin/python tools/try_autologin.py`.
 
 ## Install
 
-Needs macOS, Python 3.11+, the new Teams desktop app, and Homebrew.
+macOS with the new Teams desktop app and [Homebrew](https://brew.sh). One command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dungpham259dev/teams-reader/main/install.sh | bash
+```
+
+It installs `snappy` and `uv` if missing, installs the `teams-reader` CLI,
+downloads its browser, then runs `teams-reader setup`, which asks a few
+questions (profile name, which Teams cache, proxy/VPN, optional automatic
+re-login, background sync), writes the config, registers the MCP server with
+Claude Code, and offers to sign in to Teams. Re-run `teams-reader setup` any
+time to add or change a profile.
+
+Manual install, if you prefer:
 
 ```bash
 brew install snappy uv
-uv tool install "teams-reader[browser] @ git+https://github.com/dungpham259dev/teams-reader"
-teams-reader install-browser   # Chromium for the browser features
+export CPPFLAGS="-I$(brew --prefix snappy)/include" LDFLAGS="-L$(brew --prefix snappy)/lib"
+uv tool install --python-preference only-managed --python 3.13 \
+  "teams-reader[browser] @ git+https://github.com/dungpham259dev/teams-reader"
+teams-reader install-browser
+teams-reader setup
 ```
 
-The repo is private: ask for access, and make sure git can authenticate to
-GitHub (e.g. `gh auth login`) before installing.
-
-From a checkout instead: `python3 -m venv venv && venv/bin/pip install -e ".[browser]"`.
+The `CPPFLAGS`/`LDFLAGS` are needed because a dependency pins `python-snappy`
+0.6.1, which compiles against Homebrew's snappy.
 
 ## Configuration
 
@@ -134,6 +148,7 @@ claude mcp add teams-client-b -- teams-reader --profile client-b mcp
 ## Use
 
 ```bash
+teams-reader setup            # interactive setup: add/change a profile, register with Claude
 teams-reader config           # show the active profile's settings
 teams-reader locate           # show the Teams cache databases found
 teams-reader ingest           # read the cache into the store (one shot)

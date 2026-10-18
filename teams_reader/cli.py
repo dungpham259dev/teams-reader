@@ -5,6 +5,7 @@ import argparse
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 from typing import Sequence
 
 from teams_reader import config, settings
@@ -160,6 +161,43 @@ def _cmd_install_browser(_: argparse.Namespace) -> int:
     return subprocess.call([sys.executable, "-m", "playwright", "install", "chromium"])
 
 
+def _mcp_exists(name: str) -> bool:
+    return subprocess.call(["claude", "mcp", "get", name], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL) == 0
+
+
+def _register_mcp(cmd: list[str], ask=input, exists=_mcp_exists) -> None:
+    name = cmd[cmd.index("--") - 1]
+    if exists(name):
+        if not ask(f"Claude Code already has an MCP server {name!r}. Replace it? [y/N]: ").strip().lower().startswith("y"):
+            print(f"Kept the existing {name!r}.")
+            return
+        subprocess.call(["claude", "mcp", "remove", "--scope", "user", name])
+    subprocess.call(cmd)
+
+
+def _installed_exe() -> str:
+    # Absolute path, so Claude Code finds it even without this shell's PATH.
+    found = shutil.which("teams-reader")
+    return str(Path(found).resolve()) if found else str(Path(sys.argv[0]).resolve())
+
+
+def _cmd_setup(_: argparse.Namespace) -> int:
+    from teams_reader import setup_wizard
+
+    print("teams-reader setup: press Enter to accept the [default].\n")
+    exe = _installed_exe()
+    setup_wizard.run(
+        ask=input,
+        say=print,
+        register=_register_mcp,
+        login=lambda name: subprocess.call([exe, "--profile", name, "login"]),
+        exe=exe,
+    )
+    print("\nDone. Restart Claude Code (or run /mcp) and ask it about your Teams chats.")
+    return 0
+
+
 def _cmd_config(_: argparse.Namespace) -> int:
     print(settings.describe(settings.active()))
     print(f"{'config':>12}: {settings.resolve_config_path()} (override with TEAMS_READER_CONFIG)")
@@ -171,6 +209,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--profile", default=None, help="config profile to use (default: config default_profile)")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    sub.add_parser("setup", help="interactive first-run setup (config + Claude Code)").set_defaults(func=_cmd_setup)
     sub.add_parser("config", help="show the active profile's settings").set_defaults(func=_cmd_config)
     sub.add_parser("install-browser", help="download the Chromium build the browser features use").set_defaults(
         func=_cmd_install_browser
