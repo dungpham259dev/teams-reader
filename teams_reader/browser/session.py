@@ -128,6 +128,7 @@ def capture_request(
     start = time.monotonic()
     last_reload_ms = 0.0
     conv_seen_ms: float | None = None
+    signing_in = False
     _open(page)
     try:
         while "messages" not in captured:
@@ -160,8 +161,19 @@ def capture_request(
                     raise LoginRequired(
                         "Teams session expired; call sync_history or run `teams-reader login`"
                     )
+                if not signing_in:
+                    signing_in = True
+                    start = time.monotonic()  # fresh budget for sign-in (incl. MFA)
                 if autologin is not None:
                     autologin.step(page, autologin_mod.visible_keys(page), autologin_mod.read_text(page))
+                page.wait_for_timeout(1_000)
+                continue  # never reload mid sign-in
+            if signing_in:
+                # Signed in: give the app (a cold first boot over a VPN) a fresh budget.
+                signing_in = False
+                start = time.monotonic()
+                last_reload_ms = 0.0
+                continue
             if elapsed_ms - last_reload_ms >= _RELOAD_EVERY_MS:
                 last_reload_ms = elapsed_ms
                 _open(page)
