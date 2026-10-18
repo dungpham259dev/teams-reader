@@ -1,0 +1,35 @@
+# Copy to ~/.config/teams-reader/config.toml and edit.
+# Each profile has its own store, browser login and images; register one MCP
+# server per profile:  claude mcp add teams-<name> -- teams-reader --profile <name> mcp
+# Any TEAMS_READER_* environment variable overrides the selected profile.
+
+default_profile = "work"
+
+[profiles.work]
+# Where messages come from locally: "work" (teams.microsoft.com), "personal"
+# (teams.live.com), "none" (server sync only), or a path to an
+# *.indexeddb.leveldb directory. The desktop app keeps ALL work accounts in one
+# cache, so for a second work account use cache = "none" (browser sync only).
+cache = "work"
+
+# Proxy for the reader's browser, e.g. a corporate VPN's SOCKS5 port.
+# Omit for a direct connection.
+# proxy = "socks5://127.0.0.1:1080"
+
+# Optional unattended re-login (user-initiated actions only; MFA still needs
+# your phone). A dotenv file with the email and password; omit to log in by hand
+# with `teams-reader --profile work login`.
+# credentials_env = "~/secrets/work.env"
+# email_key = "EMAIL"
+# password_key = "PASSWORD"
+
+# Warm browser + background sync in the MCP server (~300 MB RAM while in use).
+live_sync = true
+autologin = true
+
+# Data location; default ~/Library/Application Support/teams-reader/profiles/<name>
+# data_dir = "~/somewhere"
+
+# [profiles.client-b]
+# cache = "none"
+# proxy = "socks5://127.0.0.1:1081"

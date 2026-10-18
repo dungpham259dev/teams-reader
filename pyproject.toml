@@ -1,0 +1,29 @@
+[project]
+name = "teams-reader"
+version = "0.1.0"
+description = "Read your own Microsoft Teams chats from the local cache into a searchable store for an AI assistant (macOS)."
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = [
+    "dfindexeddb",
+    "python-snappy",
+    "mcp",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-cov"]
+browser = ["playwright>=1.40"]
+
+[project.scripts]
+teams-reader = "teams_reader.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["unit: fast isolated tests", "integration: cross-component tests"]
+
+[tool.setuptools.packages.find]
+include = ["teams_reader*"]
+
+[tool.setuptools.package-data]
+teams_reader = ["store/schema.sql"]
