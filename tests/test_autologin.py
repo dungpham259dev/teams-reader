@@ -166,3 +166,55 @@ def test_make_autologin_respects_disable_flag_and_missing_file(tmp_path, monkeyp
     monkeypatch.setenv("TEAMS_READER_CREDENTIALS_ENV", str(tmp_path / "none.env"))
     settings.activate(None)
     assert autologin.make_autologin() is None
+
+
+@pytest.mark.unit
+def test_parse_env_drops_inline_comments_but_keeps_hashes_in_values():
+    text = 'A=a@b.c  # jira login\nB="pa#ss"  # quoted\nC=x#y\nD=  spaced value  \n'
+    assert autologin.parse_env(text) == {"A": "a@b.c", "B": "pa#ss", "C": "x#y", "D": "spaced value"}
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("email,shape", [
+    ("john.doe@corp.example", "21 chars, ***@corp.example"),
+    ("thann008", "8 chars, no @"),
+    ("", "empty"),
+])
+def test_email_shape_hides_the_local_part(email, shape):
+    assert autologin.email_shape(email) == shape
+
+
+class _ClearingPage(_FakePage):
+    """The login page wipes the first value typed (its JS was not ready yet)."""
+
+    def __init__(self, screens):
+        super().__init__(screens)
+        self.values = {}
+        self.wipes = 1
+
+    def fill(self, selector, value):
+        super().fill(selector, value)
+        self.values[selector] = "" if self.wipes else value
+        self.wipes = max(0, self.wipes - 1)
+
+    def input_value(self, selector):
+        return self.values.get(selector, "")
+
+
+@pytest.mark.unit
+def test_email_is_refilled_when_the_page_cleared_it():
+    ms = "https://login.microsoftonline.com/x"
+    page = _ClearingPage([(ms, {"ms_email"}), (ms, {"ms_password"})])
+    login = autologin.AutoLogin(autologin.Credentials("me@corp.example", "pw"), on_mfa=lambda n: None)
+    login.step(page, {"ms_email"}, page.text_of)
+    assert page.values[autologin.SELECTORS["ms_email"]] == "me@corp.example"
+    assert page.clicked == [autologin.SELECTORS["ms_next"]]
+
+
+@pytest.mark.unit
+def test_rejected_email_error_shows_only_its_shape():
+    page = _FakePage([("https://login.microsoftonline.com/x", {"ms_error"})])
+    login = autologin.AutoLogin(autologin.Credentials("secret.name@corp.example", "pw"), on_mfa=lambda n: None)
+    with pytest.raises(autologin.LoginFailed) as err:
+        login.step(page, {"ms_error"}, lambda s: "Enter a valid email address")
+    assert "***@corp.example" in str(err.value) and "secret.name" not in str(err.value)

@@ -48,6 +48,26 @@ class Credentials:
     password: str = field(repr=False)
 
 
+_QUOTED_RE = re.compile(r"""^(["'])(.*?)\1(?:\s+#.*)?$""")
+
+
+def _env_value(raw: str) -> str:
+    value = raw.strip()
+    quoted = _QUOTED_RE.match(value)
+    if quoted:
+        return quoted.group(2)
+    return re.split(r"\s+#", value, maxsplit=1)[0].strip()  # "x  # comment" -> "x"
+
+
+def email_shape(email: str) -> str:
+    """Describe a sign-in name for diagnostics without revealing who it is."""
+    if not email:
+        return "empty"
+    if "@" not in email:
+        return f"{len(email)} chars, no @"
+    return f"{len(email)} chars, ***@{email.rsplit('@', 1)[1]}"
+
+
 def parse_env(text: str) -> dict[str, str]:
     out: dict[str, str] = {}
     for line in text.splitlines():
@@ -56,10 +76,7 @@ def parse_env(text: str) -> dict[str, str]:
         match = _LINE_RE.match(line)
         if not match:
             continue
-        value = match.group(2).strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
-            value = value[1:-1]
-        out[match.group(1)] = value
+        out[match.group(1)] = _env_value(match.group(2))
     return out
 
 
@@ -151,13 +168,16 @@ class AutoLogin:
         """Act on the current login screen; return the detected state."""
         state = detect_state(page.url, present)
         if state == "error":
-            raise LoginFailed(f"sign-in rejected: {read_text(SELECTORS['ms_error'])[:200]}")
+            raise LoginFailed(
+                f"sign-in rejected: {read_text(SELECTORS['ms_error'])[:200]} "
+                f"(email used: {email_shape(self._creds.email)})"
+            )
         if state == "mfa" and not self._mfa_reported:
             self._mfa_reported = True
             number = read_text(SELECTORS["mfa_number"]) if "mfa_number" in present else None
             self._on_mfa(number)
         elif state == "email":
-            page.fill(SELECTORS["ms_email"], self._creds.email)
+            self._fill_checked(page, SELECTORS["ms_email"], self._creds.email)
             page.click(SELECTORS["ms_next"])
         elif state == "password":
             self._submit_password_once()
@@ -172,6 +192,18 @@ class AutoLogin:
         elif state == "kmsi":
             page.click(SELECTORS["ms_next"])  # "Stay signed in? Yes"
         return state
+
+    @staticmethod
+    def _fill_checked(page, selector: str, value: str, attempts: int = 3) -> None:
+        # The sign-in page can wipe a value typed before its scripts are ready.
+        for _ in range(attempts):
+            page.fill(selector, value)
+            reader = getattr(page, "input_value", None)
+            if reader is None or reader(selector) == value:
+                return
+            if hasattr(page, "wait_for_timeout"):
+                page.wait_for_timeout(500)
+        raise LoginFailed(f"the sign-in page kept clearing the email field ({email_shape(value)})")
 
     def _submit_password_once(self) -> None:
         # A second password screen means the first was rejected: stop, don't lock the account.
