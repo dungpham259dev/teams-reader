@@ -223,15 +223,15 @@ class AutoLogin:
 
     def _act(self, page, state: str, present: set[str]) -> bool:
         if state == "email":
-            self._fill_checked(page, SELECTORS["ms_email"], self._creds.email)
+            self._fill_checked(page, SELECTORS["ms_email"], self._creds.email, "email")
             return self._click(page, SELECTORS["ms_next"])
         if state == "password":
-            page.fill(SELECTORS["ms_password"], self._creds.password)
+            self._fill_checked(page, SELECTORS["ms_password"], self._creds.password, "password")
             return self._click(page, SELECTORS["ms_next"])
         if state == "adfs":
             if "adfs_user" in present:
-                page.fill(SELECTORS["adfs_user"], self._creds.email)
-            page.fill(SELECTORS["adfs_password"], self._creds.password)
+                self._fill_checked(page, SELECTORS["adfs_user"], self._creds.email, "username")
+            self._fill_checked(page, SELECTORS["adfs_password"], self._creds.password, "password")
             return self._click(page, SELECTORS["adfs_submit"])
         if state == "pick_work":
             return self._click(page, SELECTORS["pick_work"])
@@ -247,16 +247,27 @@ class AutoLogin:
         return True
 
     @staticmethod
-    def _fill_checked(page, selector: str, value: str, attempts: int = 3) -> None:
-        # The sign-in page can wipe a value typed before its scripts are ready.
+    def _fill_checked(page, selector: str, value: str, label: str, attempts: int = 3) -> None:
+        """Type into the field the user sees, and confirm it kept the value.
+
+        Microsoft's pages keep off-screen copies of their inputs ahead of the real
+        ones, so ``page.fill`` (first match) can type into an invisible field;
+        the page can also wipe a value typed before its scripts are ready.
+        """
         for _ in range(attempts):
-            page.fill(selector, value)
-            reader = getattr(page, "input_value", None)
-            if reader is None or reader(selector) == value:
+            target = _on_screen_element(page, selector)
+            if target is not None:
+                target.fill(value)
+                kept = target.input_value() == value
+            else:
+                page.fill(selector, value)
+                reader = getattr(page, "input_value", None)
+                kept = reader is None or reader(selector) == value
+            if kept:
                 return
             if hasattr(page, "wait_for_timeout"):
                 page.wait_for_timeout(500)
-        raise LoginFailed(f"the sign-in page kept clearing the email field ({email_shape(value)})")
+        raise LoginFailed(f"the sign-in page kept clearing the {label} field")
 
 
 def navigation_failure_message(url: str, failure: str) -> str:
@@ -271,9 +282,33 @@ def navigation_failure_message(url: str, failure: str) -> str:
     return f"{host} failed to load during sign-in ({failure}): {hint}"
 
 
-def on_screen(box: dict | None) -> bool:
-    """A bounding box the user could actually see (not moved off-screen)."""
+def _on_screen_element(page, selector: str):
+    """The first match the user can actually see, or None (e.g. a test double)."""
+    locator = getattr(page, "locator", None)
+    if locator is None:
+        return None
+    try:
+        for element in locator(selector).all():
+            if element.is_visible() and on_screen(element.bounding_box()):
+                return element
+    except Exception:  # noqa: BLE001 - mid-navigation pages throw
+        return None
+    return None
+
+
+# Microsoft keeps a tiny (10px) decoy passwd input on its sign-in pages.
+_MIN_FIELD_WIDTH = 50
+_MIN_FIELD_HEIGHT = 15
+
+
+_FIELD_KEYS = {"ms_email", "ms_password", "adfs_user", "adfs_password"}
+
+
+def on_screen(box: dict | None, field: bool = True) -> bool:
+    """Visible to the user; input ``field``s must also not be tiny decoys."""
     if not box or box["width"] <= 0 or box["height"] <= 0:
+        return False
+    if field and (box["width"] < _MIN_FIELD_WIDTH or box["height"] < _MIN_FIELD_HEIGHT):
         return False
     return box["x"] + box["width"] > 0 and box["y"] + box["height"] > 0
 
@@ -284,7 +319,7 @@ def visible_keys(page) -> set[str]:
     for key, selector in SELECTORS.items():
         try:
             for element in page.locator(selector).all():
-                if element.is_visible() and on_screen(element.bounding_box()):
+                if element.is_visible() and on_screen(element.bounding_box(), field=key in _FIELD_KEYS):
                     keys.add(key)
                     break
         except Exception:  # noqa: BLE001 - mid-navigation pages throw

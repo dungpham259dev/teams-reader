@@ -234,6 +234,7 @@ def test_email_screen_wins_over_a_prefilled_hidden_password_field():
     ({"x": 10, "y": 20, "width": 300, "height": 30}, True),
     ({"x": -9999, "y": 20, "width": 300, "height": 30}, False),
     ({"x": 10, "y": 20, "width": 0, "height": 0}, False),
+    ({"x": 1270, "y": 300, "width": 10, "height": 10}, False),  # Microsoft's 10px decoy passwd
     (None, False),
 ])
 def test_on_screen(box, shown):
@@ -324,3 +325,63 @@ def test_failed_sign_in_navigation_is_explained():
     assert "proxy" in message and "x=1" not in message
     cert = autologin.navigation_failure_message("https://idp.corp.example/", "net::ERR_CERT_AUTHORITY_INVALID")
     assert "certificate" in cert
+
+
+class _El:
+    def __init__(self, box):
+        self.box, self.value = box, ""
+
+    def is_visible(self):
+        return True
+
+    def bounding_box(self):
+        return self.box
+
+    def fill(self, value, **kwargs):
+        self.value = value
+
+    def input_value(self, **kwargs):
+        return self.value
+
+
+class _Locator:
+    def __init__(self, elements):
+        self.elements = elements
+
+    def all(self):
+        return self.elements
+
+
+class _TwoPasswordFieldsPage(_FakePage):
+    """Microsoft's password page: an off-screen passwd input precedes the real one."""
+
+    def __init__(self, screens):
+        super().__init__(screens)
+        self.hidden = _El({"x": 1270, "y": 300, "width": 10, "height": 10})
+        self.real = _El({"x": 100, "y": 200, "width": 300, "height": 30})
+
+    def locator(self, selector):
+        if selector == autologin.SELECTORS["ms_password"]:
+            return _Locator([self.hidden, self.real])
+        return _Locator([])
+
+    def fill(self, selector, value):
+        self.hidden.value = value  # what page.fill does: the first match
+
+
+@pytest.mark.unit
+def test_password_goes_into_the_on_screen_field_not_the_first_match():
+    ms = "https://login.microsoftonline.com/x"
+    page = _TwoPasswordFieldsPage([(ms, {"ms_password"}), (ms, {"mfa_text"})])
+    login = autologin.AutoLogin(autologin.Credentials("a@b.c", "pw"), on_mfa=lambda n: None)
+    login.step(page, {"ms_password"}, page.text_of)
+    assert page.real.value == "pw" and page.hidden.value == ""
+    assert page.clicked == [autologin.SELECTORS["ms_next"]]
+
+
+@pytest.mark.unit
+def test_small_non_input_elements_like_the_mfa_number_still_count():
+    number_box = {"x": 600, "y": 300, "width": 24, "height": 40}
+    assert autologin.on_screen(number_box, field=False) is True
+    assert autologin.on_screen(number_box) is False  # too small to be a real input
+    assert autologin.on_screen({"x": -9999, "y": 0, "width": 24, "height": 40}, field=False) is False
