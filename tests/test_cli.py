@@ -284,3 +284,23 @@ def test_setup_yes_with_a_bad_option_exits_2(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(setup_wizard, "available_caches", lambda: ["work"])
     assert cli.main(["setup", "--yes", "--proxy", "not-a-url", "--no-sign-in", "--no-register"]) == 2
     assert "--proxy was not accepted" in capsys.readouterr().err
+
+
+@pytest.mark.unit
+def test_update_upgrades_the_uv_tool_then_the_browser(tmp_path, monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(cli, "_uv_tool_dir", lambda: cli.Path(cli.sys.prefix).parent)
+    monkeypatch.setattr(cli, "_snappy_flags", lambda: {"CPPFLAGS": "-Ix"})
+    monkeypatch.setattr(cli.subprocess, "call", lambda cmd, **kw: calls.append((cmd, kw.get("env", {}).get("CPPFLAGS"))) or 0)
+    assert cli.main(["update"]) == 0
+    assert calls[0] == (["uv", "tool", "upgrade", "teams-reader"], "-Ix")
+    assert calls[1][0][-1] == "install-browser"
+    assert "/mcp" in capsys.readouterr().out
+
+
+@pytest.mark.unit
+def test_update_from_a_source_checkout_says_git_pull(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "_uv_tool_dir", lambda: cli.Path("/somewhere/else"))
+    monkeypatch.setattr(cli.subprocess, "call", lambda *a, **k: pytest.fail("must not run"))
+    assert cli.main(["update"]) == 1
+    assert "git pull" in capsys.readouterr().err

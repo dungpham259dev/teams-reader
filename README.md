@@ -56,6 +56,21 @@ shell has no terminal for the questions, so it runs setup unattended:
 `teams-reader setup --help` lists every option (`--cache`, `--no-sign-in`,
 `--no-live-sync`, `--make-default`, ...).
 
+### Update
+
+```bash
+teams-reader update
+```
+
+It pulls the latest version and its browser, and keeps your config, chats and
+sign-in. Then run `/mcp` in each open Claude Code session (or restart it).
+Installs from before this command existed update once with:
+
+```bash
+CPPFLAGS="-I$(brew --prefix snappy)/include" LDFLAGS="-L$(brew --prefix snappy)/lib" \
+  uv tool upgrade teams-reader && teams-reader install-browser
+```
+
 <details>
 <summary>Manual install</summary>
 
@@ -160,6 +175,7 @@ in the profile's data folder under `logs/`, rotated at 1 MB; set
 teams-reader setup              # add or change a profile, sign in, register with Claude
 teams-reader profiles | use NAME | config
 teams-reader logs -f            # follow the activity log live
+teams-reader update             # latest version; keeps config and data
 teams-reader login              # sign in to Teams web (opens a window)
 teams-reader backfill [--full] [--chat NAME] [--max-pages N]
 teams-reader ingest | daemon    # read the desktop cache once / every 45s

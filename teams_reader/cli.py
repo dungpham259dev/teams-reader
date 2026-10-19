@@ -162,6 +162,43 @@ def _cmd_install_browser(_: argparse.Namespace) -> int:
     return subprocess.call([sys.executable, "-m", "playwright", "install", "chromium"])
 
 
+def _uv_tool_dir() -> Path | None:
+    try:
+        out = subprocess.run(["uv", "tool", "dir"], capture_output=True, text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return Path(out.strip()).resolve()
+
+
+def _snappy_flags() -> dict[str, str]:
+    # A dependency pins python-snappy 0.6.1, which compiles against Homebrew's snappy.
+    try:
+        prefix = subprocess.run(["brew", "--prefix", "snappy"], capture_output=True, text=True, check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return {}
+    return {"CPPFLAGS": f"-I{prefix}/include", "LDFLAGS": f"-L{prefix}/lib"}
+
+
+def _cmd_update(_: argparse.Namespace) -> int:
+    tools = _uv_tool_dir()
+    if tools is None or not Path(sys.prefix).resolve().is_relative_to(tools):
+        print(f"teams-reader runs from {sys.prefix}, not a uv tool install: update that checkout with "
+              "`git pull` instead.", file=sys.stderr)
+        return 1
+    env = {**os.environ, **_snappy_flags()}
+    print("Updating teams-reader from its source...")
+    code = subprocess.call(["uv", "tool", "upgrade", "teams-reader"], env=env)
+    if code != 0:
+        return code
+    print("Updating its browser...")
+    code = subprocess.call([_installed_exe(), "install-browser"])
+    if code != 0:
+        return code
+    print("Updated; config, chats and sign-in are kept. In Claude Code run /mcp (or restart it) "
+          "in each open session so the server uses the new version.")
+    return 0
+
+
 def _mcp_exists(name: str) -> bool:
     return subprocess.call(["claude", "mcp", "get", name], stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL) == 0
@@ -289,6 +326,9 @@ def build_parser() -> argparse.ArgumentParser:
         func=_cmd_install_browser
     )
 
+    sub.add_parser("update", help="update teams-reader to the latest version (keeps config and data)").set_defaults(
+        func=_cmd_update, quiet=True
+    )
     sub.add_parser("ingest", help="read the cache into the store").set_defaults(func=_cmd_ingest)
 
     daemon = sub.add_parser("daemon", help="poll the cache on an interval")
