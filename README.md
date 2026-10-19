@@ -84,8 +84,12 @@ To use several accounts side by side instead, run `teams-reader setup` for
 each one. Setup registers a separate server per extra profile
 (`teams-<name>`), and Claude can query all of them at once.
 
-The desktop app keeps every work account in one cache, so a second work
-account should use `cache = "none"` and get its chats from Teams web only.
+The desktop app keeps every work account in one cache. When it holds
+messages for more than one account, each profile reads only its own: after
+the Teams web sign-in, teams-reader matches the cache to the account by its
+chats and remembers it. Until then it reads nothing from that cache (Claude
+is told why), so accounts never mix. To pin it by hand, set
+`account = "<user id>"` in the profile; the ids are listed in that message.
 
 ## How it works
 

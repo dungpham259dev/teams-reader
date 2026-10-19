@@ -9,9 +9,13 @@ default_profile = "work"
 [profiles.work]
 # Where messages come from locally: "work" (teams.microsoft.com), "personal"
 # (teams.live.com), "none" (server sync only), or a path to an
-# *.indexeddb.leveldb directory. The desktop app keeps ALL work accounts in one
-# cache, so for a second work account use cache = "none" (browser sync only).
+# *.indexeddb.leveldb directory.
 cache = "work"
+
+# The desktop app keeps ALL work accounts in one cache. When several have
+# messages there, the profile's account is matched after the Teams web sign-in;
+# set it here only to pin it by hand (the user id from the notice).
+# account = "00000000-0000-0000-0000-000000000000"
 
 # Proxy for the reader's browser, e.g. a corporate VPN's SOCKS5 port.
 # Omit for a direct connection.

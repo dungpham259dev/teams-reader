@@ -13,6 +13,7 @@
     live_sync = true                    # warm browser + background sync in the MCP server
     autologin = true
     data_dir = "~/somewhere"            # default: <app support>/profiles/<name>
+    account = "<user id>"               # only when several work accounts share the cache
 
 Each profile has its own store, browser profile and images, so one MCP server
 per profile (``teams-reader --profile NAME mcp``) keeps accounts apart. With no
@@ -51,6 +52,7 @@ class Profile:
     password_key: str = "PASSWORD"
     live_sync: bool = True
     autologin: bool = True
+    account: str | None = None
     db_override: Path | None = None
 
     @property
@@ -106,6 +108,7 @@ def _from_table(name: str, table: Mapping, default_dir: Path) -> Profile:
         password_key=str(table.get("password_key", "PASSWORD")),
         live_sync=bool(table.get("live_sync", True)),
         autologin=bool(table.get("autologin", True)),
+        account=str(table["account"]).strip().lower() if table.get("account") else None,
     )
 
 
@@ -217,6 +220,7 @@ def describe(profile: Profile) -> str:
         ("data", str(profile.data_dir)),
         ("store", str(profile.db_path)),
         ("cache", profile.cache),
+        ("account", profile.account or "auto (from Teams web)"),
         ("proxy", profile.proxy or "direct"),
         ("credentials", str(profile.credentials_env) if profile.credentials_env else "none (no auto sign-in)"),
         ("live sync", "on" if profile.live_sync else "off"),

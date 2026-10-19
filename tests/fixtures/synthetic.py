@@ -66,3 +66,33 @@ def sample_dump() -> str:
         "value": nested_json,
     }
     return dump + "\n" + json.dumps(extra)
+
+
+TENANT_A = "11111111-1111-1111-1111-111111111111"
+USER_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+TENANT_B = "22222222-2222-2222-2222-222222222222"
+USER_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
+
+def database_name(manager: str, tenant: str, user: str) -> str:
+    return f"Teams:{manager}:react-web-client:{tenant}:{user}:en-us"
+
+
+def build_account_dump(per_account: dict[tuple[str, str], list[dict[str, Any]]]) -> str:
+    """A dump shaped like the real one: data records carry only a numeric
+    ``database_id``; ``DatabaseNameKey`` records map it to a name, with the id
+    decoded as a signed byte by dfindexeddb (154 -> -102)."""
+    lines = []
+    for index, ((tenant, user), values) in enumerate(per_account.items()):
+        db_id = 154 + index
+        lines.append(json.dumps({
+            "__type__": "IndexedDBRecord",
+            "database_id": 0,
+            "key": {"__type__": "DatabaseNameKey", "database_name": database_name("replychain-manager", tenant, user)},
+            "value": db_id - 256,
+        }))
+        for value in values:
+            record = _record(value)
+            record["database_id"] = db_id
+            lines.append(json.dumps(record))
+    return "\n".join(lines)

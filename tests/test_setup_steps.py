@@ -46,3 +46,33 @@ def test_connect_asks_for_a_visible_full_sync():
 
     setup_steps.connect("default", backfill_fn=capture)
     assert seen["headless"] is False and seen["full"] is True
+
+
+@pytest.mark.unit
+def test_read_cache_explains_a_shared_cache():
+    from teams_reader.cache.accounts import MixedCacheError
+
+    def mixed(conn):
+        raise MixedCacheError("2 accounts")
+
+    result = setup_steps.read_cache("default", ingest_fn=mixed)
+    assert not result.ok and "after the Teams web sign-in" in result.detail
+
+
+@pytest.mark.unit
+def test_connect_rereads_a_cache_waiting_on_the_web_chats():
+    from teams_reader.cache.accounts import PENDING_STATE
+    from teams_reader.store import db as db_mod
+
+    calls = []
+
+    def backfill(conn, **kw):
+        db_mod.set_state(conn, PENDING_STATE, "waiting")
+        return BackfillSummary(1, 1, 1)
+
+    def ingest(conn):
+        calls.append(1)
+        db_mod.delete_state(conn, PENDING_STATE)
+
+    result = setup_steps.connect("default", backfill_fn=backfill, ingest_fn=ingest)
+    assert calls == [1] and "desktop cache matched" in result.detail

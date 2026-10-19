@@ -101,6 +101,8 @@ def apply_conversations(
     for conv in conversations:
         db_mod.set_chat_meta(conn, conv.chat_id, conv.topic, conv.kind)
     conn.commit()
+    if conversations:
+        db_mod.set_web_chats(conn, [conv.chat_id for conv in conversations])
 
 
 def _chat_targets(

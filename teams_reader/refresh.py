@@ -15,12 +15,13 @@ from pathlib import Path
 from typing import Callable
 
 from teams_reader.cache import locate
+from teams_reader.cache.accounts import MixedCacheError
 from teams_reader.ingest import ingest
 from teams_reader.store import db as db_mod
 
 _FINGERPRINT_KEY = "cache_fingerprint"
 # Bump when parsing/storage changes so an unchanged cache is re-ingested once.
-PARSER_VERSION = 4
+PARSER_VERSION = 5
 
 DEFAULT_MIN_INTERVAL = 3.0
 
@@ -76,7 +77,10 @@ def maybe_refresh(
         fingerprint = fingerprint_fn() if fingerprint_fn is not None else None
         if fingerprint is not None and fingerprint == _last_fingerprint(conn):
             return False
-        ingest_fn(conn)
+        try:
+            ingest_fn(conn)
+        except MixedCacheError:
+            pass  # remember the fingerprint anyway: a web sync clears it (set_web_chats)
         if fingerprint is not None:
             _state["fingerprint"] = fingerprint
             if conn is not None:

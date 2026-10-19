@@ -6,9 +6,10 @@ index mirrors the ``messages`` table through triggers for search.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable
 
 from teams_reader.parse.messages import Message
 
@@ -341,6 +342,28 @@ def set_state(conn: sqlite3.Connection, key: str, value: str) -> None:
         (key, value),
     )
     conn.commit()
+
+
+def delete_state(conn: sqlite3.Connection, key: str) -> None:
+    conn.execute("DELETE FROM sync_state WHERE key = ?", (key,))
+    conn.commit()
+
+
+_WEB_CHATS_KEY = "web_chat_ids"
+
+
+def set_web_chats(conn: sqlite3.Connection, chat_ids: Iterable[str]) -> None:
+    """Remember the web session's chats; a cache waiting on them is re-read."""
+    set_state(conn, _WEB_CHATS_KEY, json.dumps(sorted(set(chat_ids))))
+    if get_state(conn, "cache_account_pending"):
+        delete_state(conn, "cache_fingerprint")
+
+
+def web_chat_ids(conn: sqlite3.Connection) -> set[str]:
+    raw = get_state(conn, _WEB_CHATS_KEY)
+    stored = set(json.loads(raw)) if raw else set()
+    rows = conn.execute("SELECT DISTINCT chat_id FROM messages WHERE source = 'browser'").fetchall()
+    return stored | {r["chat_id"] for r in rows if r["chat_id"]}
 
 
 def high_water_ts(conn: sqlite3.Connection) -> int:
