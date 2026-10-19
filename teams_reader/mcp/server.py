@@ -12,8 +12,8 @@ import threading
 import time
 from pathlib import Path
 
-from teams_reader import config, logs, refresh
-from teams_reader.mcp import livesync, tools
+from teams_reader import config, logs, refresh, settings
+from teams_reader.mcp import freshness, livesync, tools
 from teams_reader.store import db as db_mod
 
 
@@ -36,11 +36,25 @@ def _image_class():
     return Image
 
 
+def instructions(profile_name: str) -> str:
+    return (
+        f"Read-only access to the user's own Microsoft Teams chats (profile {profile_name!r}); "
+        "it never sends, reacts or marks anything read. Chats change constantly: before answering "
+        "anything about the current state of a chat (what's new, the latest message, whether someone "
+        "replied, what the user should reply), call read_chat or recent again, even when earlier "
+        "results are in the conversation. Never answer those from earlier tool output. Results carry "
+        "`freshness`: `as_of`, `web_sync_age_s`, and `web_sync_error` when only the desktop cache "
+        "(which can lag minutes) is current; mention it when it matters. Drafts from suggest_reply are "
+        "for the user to copy and send; never claim a message was sent."
+    )
+
+
 def build_server(db_path: Path | None = None):
     config.ensure_app_dirs()
     db_file = db_path or config.db_path()
     conn = db_mod.connect(db_file)
-    server = _server_class()("teams-reader")
+    profile = settings.active()
+    server = _server_class()("teams-reader", instructions=instructions(profile.name))
     log = logs.get("mcp")
     log.info("server ready (store %s, live sync %s)", db_file, "on" if livesync.enabled() else "off")
     register = server.tool
@@ -71,12 +85,32 @@ def build_server(db_path: Path | None = None):
     if live is not None:
         atexit.register(live.close)
 
+    def _await_fresh() -> None:
+        """Let the browser holder (any session) sync before answering."""
+        from teams_reader.browser import profile_lock
+
+        asked = time.time()
+        with lock:
+            freshness.mark_used(conn, asked)
+        if live is None:
+            return
+        live.touch()
+        waiter = db_mod.connect(db_file)  # sleeps without holding the shared connection
+        try:
+            outcome = freshness.wait_fresh(waiter, asked, syncing=profile_lock.is_held(profile.data_dir))
+        finally:
+            waiter.close()
+        if outcome != "fresh":
+            log.info("freshness before answering: %s (%.1fs)", outcome, time.time() - asked)
+
     def _query(fn, *args, **kwargs):
-        if live is not None:
-            live.touch()
+        _await_fresh()
         with lock:
             refresh.maybe_refresh(conn, fingerprint_fn=refresh.work_cache_fingerprint)
-            return fn(conn, *args, **kwargs)
+            result = fn(conn, *args, **kwargs)
+            if isinstance(result, dict):
+                result = {**result, "freshness": freshness.report(conn)}
+            return result
 
     @server.tool()
     def list_chats() -> list[dict]:

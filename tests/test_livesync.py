@@ -92,3 +92,66 @@ def test_enabled_respects_env(monkeypatch):
 @pytest.mark.parametrize("failures,expected", [(0, 30), (1, 60), (3, 240), (10, 600)])
 def test_retry_backoff_after_failures(failures, expected):
     assert livesync.backoff(30, failures, cap=600) == expected
+
+
+def _holder(tmp_path, monkeypatch, sync=None):
+    from teams_reader.store import db as db_mod
+
+    synced = []
+    monkeypatch.setattr(livesync, "sync_with", sync or (lambda conn, fetch, tpl, **kw: synced.append(tpl)))
+    live = livesync.LiveSync(tmp_path / "s.db", browser_factory=_FakeBrowser, interval=30)
+    return live, db_mod.connect(tmp_path / "s.db"), synced
+
+
+@pytest.mark.unit
+def test_a_question_from_another_session_triggers_a_sync_now(tmp_path, monkeypatch):
+    from teams_reader.mcp import freshness
+
+    live, conn, synced = _holder(tmp_path, monkeypatch)
+    try:
+        live._poll_once(conn)
+        assert synced == []  # nobody asked anything yet
+        freshness.mark_used(conn, time.time())  # written by another MCP process
+        live._poll_once(conn)
+        assert synced == ["tpl"]
+        assert freshness.synced_at(conn) is not None
+        live._poll_once(conn)
+        assert synced == ["tpl"]  # answered; next one waits for the interval
+    finally:
+        live.close()
+
+
+@pytest.mark.unit
+def test_profile_in_use_is_not_reported_as_a_broken_sync(tmp_path, monkeypatch):
+    from teams_reader.browser.profile_lock import ProfileInUse
+    from teams_reader.mcp import freshness
+    from teams_reader.store import db as db_mod
+
+    def held(*a, **k):
+        raise ProfileInUse("held by pid 1")
+
+    live, conn, _ = _holder(tmp_path, monkeypatch, sync=held)
+    try:
+        freshness.mark_used(conn, time.time())
+        live._poll_once(conn)
+        assert db_mod.get_state(conn, freshness.ERROR_KEY) is None
+        assert "held by pid 1" in live.status()["last_error"]
+    finally:
+        live.close()
+
+
+@pytest.mark.unit
+def test_a_real_failure_is_shared_so_other_sessions_do_not_wait(tmp_path, monkeypatch):
+    from teams_reader.mcp import freshness
+    from teams_reader.store import db as db_mod
+
+    def expired(*a, **k):
+        raise RuntimeError("Teams session expired")
+
+    live, conn, _ = _holder(tmp_path, monkeypatch, sync=expired)
+    try:
+        freshness.mark_used(conn, time.time())
+        live._poll_once(conn)
+        assert "expired" in db_mod.get_state(conn, freshness.ERROR_KEY)
+    finally:
+        live.close()

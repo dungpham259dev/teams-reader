@@ -72,3 +72,25 @@ def test_read_image_returns_inline_and_deletes_file(tmp_path, monkeypatch):
 
     assert "image" in str(result).lower()
     assert not img.exists()
+
+
+@pytest.mark.integration
+def test_server_tells_claude_to_requery_and_reports_freshness(tmp_path, monkeypatch):
+    pytest.importorskip("mcp")
+    monkeypatch.setattr("teams_reader.refresh.maybe_refresh", lambda *a, **k: False)
+    from teams_reader.mcp import freshness
+    from teams_reader.mcp.server import build_server, instructions
+
+    text = instructions("acme")
+    assert "'acme'" in text and "call read_chat or recent again" in text
+
+    db_file = tmp_path / "store.db"
+    seed = db_mod.connect(db_file)
+    db_mod.upsert_messages(seed, [Message("m1", "19:a@thread.v2", "Alice", 100, "hi", None)])
+    seed.close()
+
+    read = asyncio.run(build_server(db_file).call_tool("read_chat", {"name_or_id": "19:a@thread.v2"}))
+    assert "freshness" in str(read) and "as_of" in str(read)
+    check = db_mod.connect(db_file)
+    assert freshness.used_at(check) is not None  # every question is shared with the other sessions
+    check.close()
