@@ -2,6 +2,7 @@
 # Each profile has its own store, browser login and images; register one MCP
 # server per profile:  claude mcp add teams-<name> -- teams-reader --profile <name> mcp
 # Any TEAMS_READER_* environment variable overrides the selected profile.
+# Switch the default with `teams-reader use <name>`; list with `teams-reader profiles`.
 
 default_profile = "work"
 

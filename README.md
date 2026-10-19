@@ -1,126 +1,37 @@
 # teams-reader
 
-Read your own Microsoft Teams chats from the new Teams (v2) desktop app's local
-cache (and, optionally, the Teams web session) into a searchable SQLite store,
-and expose them to Claude over MCP — no Microsoft Graph, no admin consent.
-macOS only. Each user reads only their own chats.
+Read your own Microsoft Teams chats with Claude. `teams-reader` copies chats
+from the new Teams (v2) desktop app's local cache, and optionally from your
+Teams web session, into a searchable local SQLite store, and serves them to
+Claude Code over MCP. No Microsoft Graph, no admin consent, macOS only.
 
-It reads only your own local Teams data. Nothing is uploaded by the tool itself.
-
-## How it works
-
-The new Teams app stores chat in a Chromium IndexedDB/LevelDB cache. `teams-reader`:
-
-1. **locate** the work (`teams.microsoft.com`) LevelDB under the Teams container.
-2. **snapshot** it (copy, drop `LOCK`) so Teams can stay running.
-3. **dump** it to JSONL with `dfindexeddb`.
-4. **parse** messages (sender, time, text; reply quotes split out) and chat names.
-5. **store** them in SQLite with an FTS5 index, idempotently (re-ingest never duplicates).
-6. serve tools to Claude via **MCP**: `list_chats`, `read_chat`, `search`,
-   `recent`, `ask`, `chat_profile`, and `suggest_reply`.
-
-Each MCP tool first runs a debounced incremental ingest, so queries always see
-the latest cached messages without running `ingest`/`daemon` by hand.
-
-`suggest_reply(chat)` returns the recent thread, the chat kind, and a heuristic
-profile of each participant (language, tone, message length) — Claude uses that
-to write 2-3 adaptive reply options to copy into the chat. It never sends.
-
-## Images
-
-Messages reference images by URL on the AMS service; the bytes need the
-logged-in session. `teams-reader` records image URLs per message during ingest,
-then downloads the bytes through the same browser context used for backfill
-(cookie auth, no CORS). The model reads the downloaded file.
-
-```bash
-teams-reader fetch-image --chat "Project Sigma" --limit 10
-```
-
-Then, over MCP: `list_images("Project Sigma")` to see a chat's images, and
-`read_image(msg_id)` to get the image inline; the downloaded file is deleted right after it is read.
-
-## Full history (browser backfill)
-
-The cache holds only recently synced messages. To pull a chat's **full history**,
-`teams-reader` can read it from the Teams web client's internal `chatsvc` messages
-API, reusing your own logged-in session — no Graph, no admin consent.
-
-It drives a real browser (Playwright/Chromium) optionally through a proxy (e.g. a corporate VPN),
-captures one live `chatsvc` request (URL + session token), then replays it per
-conversation and follows the backward-pagination links until history is exhausted.
-It only reads; nothing is sent.
-
-```bash
-pip install -e '.[browser]'
-python -m playwright install chromium
-
-# If the profile uses a VPN proxy, bring it up first.
-teams-reader login                 # one-time: a window opens, log in (MFA)
-teams-reader backfill              # sync new/changed chats (real titles from the server)
-teams-reader backfill --full       # refetch every chat's history
-teams-reader backfill --chat Sigma --max-pages 100
-```
-
-The login persists, so later `backfill` runs (and the MCP `sync_history` tool) can
-reuse the session headless. Set the profile's `proxy` if Teams is only reachable
-through a VPN proxy.
-
-## Warm browser (MCP server)
-
-The MCP server keeps one headless reader browser open after the first tool
-call. While the tools are in use it re-syncs changed chats every ~30s in the
-background (backing off when the VPN or login is unavailable), and
-`sync_history`, `read_image` and `read_link` reuse it, so they take seconds
-instead of ~30s. Disable it with `live_sync = false` in the profile. While it
-runs it holds that profile's browser, so CLI browser commands for the same
-profile report "in use" — stop the MCP server first.
-
-## Unattended re-login
-
-When the Teams session has expired, user-initiated actions (`sync_history`,
-`read_image`, `read_link`, CLI `login`/`backfill`/`fetch-image`) sign in again by
-themselves, using the profile's `credentials_env` dotenv file and its
-`email_key`/`password_key` (no file configured = never signs in by itself;
-disable with `autologin = false`). MFA still
-needs your phone: the number to enter shows as a macOS notification. A rejected
-password is never retried. The background sync never signs in, so it cannot
-spam MFA prompts; it reports `login required` instead.
-Try it safely in a throwaway profile: `venv/bin/python tools/try_autologin.py`.
-
-## Requirements
-
-- macOS, the new Teams app signed into the target account and synced at least once.
-- `brew install snappy` (the LevelDB reader needs it).
-- Python 3.10+.
+It only reads: it never sends messages, never marks them as read and never
+reports presence. Nothing leaves your Mac except the requests to Teams itself.
 
 ## Install
 
-macOS with the new Teams desktop app and [Homebrew](https://brew.sh). One command:
+You need macOS, the new Teams desktop app signed in, and
+[Homebrew](https://brew.sh). Close Claude Code, then run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/dungpham259dev/teams-reader/main/install.sh | bash
 ```
 
-It installs `snappy` and `uv` if missing, installs the `teams-reader` CLI,
-downloads its browser, then runs `teams-reader setup`, which asks a few
-questions (profile name, which Teams cache, proxy/VPN, optional automatic
-re-login, background sync), writes the config, and then finishes everything
-so the first question in Claude is fast:
+The installer sets up the CLI and its browser, then runs `teams-reader setup`.
+Setup asks a few questions (profile name, Teams cache, VPN proxy, optional
+automatic sign-in, background sync) and then finishes everything:
 
-1. reads the Teams desktop cache into the local store;
-2. opens a browser window to sign in to Teams web (auto sign-in if configured;
-   approve MFA on the phone) and downloads every chat's full history, with
-   real chat names;
+1. reads the Teams desktop cache;
+2. opens a window to sign in to Teams web (approve MFA on your phone) and
+   downloads every chat's full history with real chat names;
 3. registers the MCP server with Claude Code.
 
-It ends with a ✓/✗ summary; each skipped or failed step prints the command
-that finishes it later (e.g. `teams-reader login`). Run setup while Claude
-Code is closed: the sign-in step cannot share the browser profile with a
-running MCP server. Re-run `teams-reader setup` any time to add or change a
+It ends with a ✓/✗ summary. A skipped or failed step prints the command that
+finishes it later. Re-run `teams-reader setup` any time to add or change a
 profile.
 
-Manual install, if you prefer:
+<details>
+<summary>Manual install</summary>
 
 ```bash
 brew install snappy uv
@@ -131,80 +42,117 @@ teams-reader install-browser
 teams-reader setup
 ```
 
-The `CPPFLAGS`/`LDFLAGS` are needed because a dependency pins `python-snappy`
-0.6.1, which compiles against Homebrew's snappy.
+The compiler flags are needed because a dependency pins `python-snappy` 0.6.1,
+which builds against Homebrew's snappy.
+</details>
 
-## Configuration
+## Use with Claude
 
-Settings live in `~/.config/teams-reader/config.toml` as named **profiles**
-(see `config.example.toml`): local cache source, optional proxy (VPN), optional
-credentials file for unattended re-login, background sync on/off, data folder.
-Without a config file the `default` profile reads the work cache, connects
-directly and never signs in by itself.
+Open Claude Code and ask, for example:
 
-```bash
-teams-reader config                     # show the active profile (no secrets)
-teams-reader --profile client-b config  # another profile
-```
+- "Which Teams chats do I have?"
+- "Summarize the Project Sigma chat since this morning."
+- "Find messages about keycloak last week."
+- "What are the images in that chat about?"
+- "Suggest a reply to the last message from Anna."
 
-Each profile keeps its own store and browser login, and a browser profile can
-be used by one process at a time (a second one fails fast with "in use").
-Register one MCP server per profile so accounts never mix:
+| Tool | What it does |
+|------|--------------|
+| `list_chats`, `read_chat`, `recent` | browse chats and their latest messages |
+| `search`, `ask` | full-text search, filterable by chat and date |
+| `chat_profile`, `suggest_reply` | participants' style, reply suggestions to copy (never sent) |
+| `list_images`, `read_image` | see a chat's images; the downloaded file is deleted after reading |
+| `list_links`, `read_link` | links shared in chats, and the page text behind them |
+| `sync_history` | pull new or full history from Teams web on demand |
 
-```bash
-claude mcp add teams-reader -- teams-reader mcp                          # default_profile
-claude mcp add teams-client-b -- teams-reader --profile client-b mcp
-```
+## Profiles
 
-## Use
-
-```bash
-teams-reader setup            # interactive setup: add/change a profile, register with Claude
-teams-reader config           # show the active profile's settings
-teams-reader locate           # show the Teams cache databases found
-teams-reader ingest           # read the cache into the store (one shot)
-teams-reader daemon           # keep the store fresh (polls every 45s)
-teams-reader login            # one-time browser login for full-history backfill
-teams-reader backfill         # sync new/changed chats via the browser session
-teams-reader fetch-image      # download chat images via the browser session
-teams-reader mcp              # run the MCP server (stdio) for Claude
-teams-reader wipe --yes       # delete the store and snapshots
-```
-
-Register the MCP server with Claude Code (see Configuration for profiles):
+Settings live in `~/.config/teams-reader/config.toml` as named profiles; see
+`config.example.toml`. Each profile has its own store, browser sign-in and
+images, so accounts never mix.
 
 ```bash
-claude mcp add teams-reader -- teams-reader mcp
+teams-reader profiles          # list profiles (* = default)
+teams-reader use client-b      # make client-b the default
+teams-reader config            # show the active profile (never secrets)
+teams-reader --profile client-b backfill   # one command on another profile
 ```
 
-Then ask Claude things like "tóm tắt chat Project Sigma" or "tìm tin nhắn về keycloak".
+The `teams-reader` MCP server follows the default profile: after
+`teams-reader use`, run `/mcp` in Claude Code (or restart it) to switch.
+To use several accounts side by side instead, run `teams-reader setup` for
+each one. Setup registers a separate server per extra profile
+(`teams-<name>`), and Claude can query all of them at once.
 
-## Permissions (macOS)
+The desktop app keeps every work account in one cache, so a second work
+account should use `cache = "none"` and get its chats from Teams web only.
 
-Cache files live in your own user container, so no admin/sudo is needed. If a run
-can't read them ("Operation not permitted"), grant your terminal **Full Disk
-Access** (System Settings → Privacy & Security → Full Disk Access) and restart it.
+## How it works
 
-## Data governance
+**Desktop cache.** New Teams stores chats in a Chromium IndexedDB (LevelDB)
+cache. `teams-reader` snapshots it so Teams can keep running, decodes it with
+`dfindexeddb`, and upserts the messages into SQLite with an FTS5 index. Each
+MCP call first re-reads the cache if it changed, so answers include the
+latest cached messages.
 
-This stores a local copy of chat content, which may belong to a client. Decide
-per tenant whether that is acceptable. `teams-reader wipe --yes` removes the store
-and all snapshots. The store lives at
-`~/Library/Application Support/teams-reader/`.
+**Teams web.** The cache holds only recent messages and often no chat names.
+A Playwright browser signed in to Teams web reads the same internal `chatsvc`
+API the web app uses, page by page, for full history, edits, deletions and
+real chat names. It blocks every request that would mark messages read or
+report presence, and parks on a blank page instead of opening a chat. Set the
+profile's `proxy` if Teams is only reachable through a VPN.
 
-## Tenant limits
+**Warm browser.** While Claude is using the tools, the MCP server keeps one
+headless browser open and syncs changed chats every ~30s, so new messages show
+up quickly and `sync_history`, `read_image` and `read_link` take seconds. It
+closes after 15 idle minutes. Turn it off with `live_sync = false`. A profile's
+browser serves one process at a time, so CLI browser commands report "in use"
+while the MCP server holds it.
 
-The cache approach depends on the tenant: Conditional Access can block sync on
-unmanaged devices (empty cache), and Intune app-protection can encrypt the cache
-(unreadable). Try `teams-reader locate` and `teams-reader ingest` on a tenant before relying on it.
+**Automatic sign-in.** If the profile names a `credentials_env` dotenv file
+(with `email_key`/`password_key`), an expired session is signed in again during
+actions you start. MFA still needs your phone, and the number shows as a macOS
+notification. A rejected password is never retried. Background sync never
+signs in; it reports `login required` instead.
+
+## CLI
+
+```bash
+teams-reader setup              # add or change a profile, sign in, register with Claude
+teams-reader profiles | use NAME | config
+teams-reader login              # sign in to Teams web (opens a window)
+teams-reader backfill [--full] [--chat NAME] [--max-pages N]
+teams-reader ingest | daemon    # read the desktop cache once / every 45s
+teams-reader fetch-image --chat NAME --limit N
+teams-reader open-link URL      # sign in to a linked site once, for read_link
+teams-reader locate             # list the Teams caches found
+teams-reader mcp                # the MCP server (stdio)
+teams-reader wipe --yes         # delete the store and snapshots
+```
+
+## Privacy and limits
+
+- The store is a local copy of chat content that may belong to a client;
+  decide per tenant whether that is acceptable. It lives under
+  `~/Library/Application Support/teams-reader/`; `teams-reader wipe --yes`
+  deletes it.
+- No admin rights are needed. If reading the cache fails with "Operation not
+  permitted", give your terminal Full Disk Access (System Settings → Privacy &
+  Security) and restart it.
+- Tenant policies can block the cache: Conditional Access may leave it empty
+  on unmanaged devices, and Intune app protection may encrypt it. Check with
+  `teams-reader locate` and `teams-reader ingest`.
 
 ## Development
 
 ```bash
-PYTHONPATH=. venv/bin/pytest --cov=teams_reader
+python3 -m venv venv && venv/bin/pip install -e '.[browser,dev]'
+venv/bin/pytest --cov=teams_reader
 ```
 
-Tests use synthetic fixtures only — no real chat data is committed.
+Tests use synthetic fixtures only; no real chat data is committed. Try
+automatic sign-in safely in a throwaway profile with
+`venv/bin/python tools/try_autologin.py`.
 
 ## License
 

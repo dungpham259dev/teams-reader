@@ -206,3 +206,37 @@ def test_register_replaces_an_existing_server_only_when_confirmed(monkeypatch):
     ran.clear()
     cli._register_mcp(cmd, ask=lambda p: "", exists=lambda name: False)
     assert ran == [cmd]
+
+
+@pytest.fixture()
+def two_profiles(tmp_path, monkeypatch):
+    path = tmp_path / "config.toml"
+    path.write_text('default_profile = "a"\n\n[profiles.a]\ncache = "none"\n\n[profiles.b]\ncache = "none"\n')
+    monkeypatch.setenv("TEAMS_READER_CONFIG", str(path))
+    return path
+
+
+@pytest.mark.unit
+def test_profiles_lists_and_marks_default(two_profiles, capsys):
+    assert cli.main(["profiles"]) == 0
+    out = capsys.readouterr().out
+    assert "* a" in out and "  b" in out
+
+
+@pytest.mark.unit
+def test_use_switches_the_default(two_profiles, capsys):
+    assert cli.main(["use", "b"]) == 0
+    assert 'default_profile = "b"' in two_profiles.read_text()
+    assert "/mcp" in capsys.readouterr().out
+
+
+@pytest.mark.unit
+def test_use_repairs_a_config_whose_default_is_gone(two_profiles):
+    two_profiles.write_text(two_profiles.read_text().replace('"a"\n', '"gone"\n', 1))
+    assert cli.main(["use", "a"]) == 0
+
+
+@pytest.mark.unit
+def test_use_unknown_profile_fails(two_profiles, capsys):
+    assert cli.main(["use", "zzz"]) == 1
+    assert "known: a, b" in capsys.readouterr().err

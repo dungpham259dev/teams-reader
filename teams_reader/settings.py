@@ -23,6 +23,7 @@ selected profile.
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -152,6 +153,39 @@ def load_profile(
         known = ", ".join(sorted(profiles)) or "none"
         raise ConfigError(f"unknown profile {chosen!r} in {path} (known: {known})")
     return _apply_env(profile, environ)
+
+
+def list_profiles(config_path: Path | None = None) -> tuple[tuple[str, ...], str]:
+    """The configured profile names and the default one."""
+    data = _read_config(config_path or resolve_config_path())
+    names = tuple(sorted(data.get("profiles") or {})) or (DEFAULT_PROFILE,)
+    return names, data.get("default_profile") or DEFAULT_PROFILE
+
+
+_DEFAULT_LINE_RE = re.compile(r"^default_profile\s*=.*$", re.MULTILINE)
+
+
+def set_default_profile(name: str, config_path: Path | None = None) -> Path:
+    """Point ``default_profile`` at ``name``, editing only that line of the file."""
+    path = config_path or resolve_config_path()
+    names, _ = list_profiles(path)
+    if name not in names:
+        raise ConfigError(f"unknown profile {name!r} in {path} (known: {', '.join(names)})")
+    text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    line = f'default_profile = "{name}"'
+    first_table = re.search(r"^\[", text, re.MULTILINE)
+    head_end = first_table.start() if first_table else len(text)
+    head, tail = text[:head_end], text[head_end:]
+    if _DEFAULT_LINE_RE.search(head):
+        updated = _DEFAULT_LINE_RE.sub(line, head, count=1) + tail
+    else:
+        updated = f"{line}\n\n{text}"
+    tomllib.loads(updated)  # never leave a broken file behind
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(updated, encoding="utf-8")
+    tmp.replace(path)
+    return path
 
 
 _active: dict[str, Profile | None] = {"profile": None, "name": None}

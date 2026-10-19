@@ -111,3 +111,38 @@ def test_package_ships_the_schema():
     from importlib.resources import files
 
     assert files("teams_reader").joinpath("store/schema.sql").is_file()
+
+
+@pytest.mark.unit
+def test_list_profiles_marks_the_default(cfg):
+    assert settings.list_profiles(cfg) == (("acme", "side"), "acme")
+
+
+@pytest.mark.unit
+def test_list_profiles_without_config_is_the_implicit_default(tmp_path):
+    assert settings.list_profiles(tmp_path / "none.toml") == (("default",), "default")
+
+
+@pytest.mark.unit
+def test_set_default_profile_keeps_comments_and_tables(cfg):
+    cfg.write_text("# mine\n" + CONFIG)
+    settings.set_default_profile("side", cfg)
+    text = cfg.read_text()
+    assert text.startswith("# mine\n")
+    assert 'default_profile = "side"' in text and 'default_profile = "acme"' not in text
+    assert settings.load_profile(config_path=cfg, environ={}).name == "side"
+
+
+@pytest.mark.unit
+def test_set_default_profile_adds_the_key_when_missing(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[profiles.a]\ncache = "none"\n')
+    settings.set_default_profile("a", path)
+    assert settings.load_profile(config_path=path, environ={}).name == "a"
+
+
+@pytest.mark.unit
+def test_set_default_profile_rejects_unknown_names(cfg):
+    with pytest.raises(settings.ConfigError, match="known: acme, side"):
+        settings.set_default_profile("nope", cfg)
+    assert 'default_profile = "acme"' in cfg.read_text()

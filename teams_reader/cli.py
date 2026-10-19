@@ -205,6 +205,24 @@ def _cmd_config(_: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_profiles(_: argparse.Namespace) -> int:
+    names, default = settings.list_profiles()
+    for name in names:
+        print(f"{'*' if name == default else ' '} {name}")
+    return 0
+
+
+def _cmd_use(args: argparse.Namespace) -> int:
+    try:
+        path = settings.set_default_profile(args.name)
+    except settings.ConfigError as exc:
+        print(f"teams-reader: {exc}", file=sys.stderr)
+        return 1
+    print(f"Default profile is now {args.name!r} ({path}).")
+    print("Run /mcp in Claude Code (or restart it) so the teams-reader server switches.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="teams-reader")
     parser.add_argument("--profile", default=None, help="config profile to use (default: config default_profile)")
@@ -212,6 +230,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("setup", help="interactive first-run setup (config + Claude Code)").set_defaults(func=_cmd_setup)
     sub.add_parser("config", help="show the active profile's settings").set_defaults(func=_cmd_config)
+    sub.add_parser("profiles", help="list profiles (* = default)").set_defaults(func=_cmd_profiles, profile_free=True)
+    use = sub.add_parser("use", help="make a profile the default")
+    use.add_argument("name")
+    use.set_defaults(func=_cmd_use, profile_free=True)
     sub.add_parser("install-browser", help="download the Chromium build the browser features use").set_defaults(
         func=_cmd_install_browser
     )
@@ -262,10 +284,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    try:
-        settings.activate(args.profile)
-    except settings.ConfigError as exc:
-        parser.error(str(exc))
+    if not getattr(args, "profile_free", False):
+        try:
+            settings.activate(args.profile)
+        except settings.ConfigError as exc:
+            parser.error(str(exc))
     return args.func(args)
 
 
