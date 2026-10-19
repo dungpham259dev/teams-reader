@@ -1,6 +1,6 @@
 import pytest
 
-from teams_reader import settings
+from teams_reader import logs, settings
 
 
 @pytest.fixture(autouse=True)
@@ -11,4 +11,5 @@ def _isolated_settings(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "APP_SUPPORT", tmp_path / "app-support")
     settings.activate(None)
     yield
+    logs.reset()
     settings.activate(None)

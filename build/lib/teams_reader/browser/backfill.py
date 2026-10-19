@@ -101,6 +101,8 @@ def apply_conversations(
     for conv in conversations:
         db_mod.set_chat_meta(conn, conv.chat_id, conv.topic, conv.kind)
     conn.commit()
+    if conversations:
+        db_mod.set_web_chats(conn, [conv.chat_id for conv in conversations])
 
 
 def _chat_targets(
@@ -150,6 +152,9 @@ def sync_with(
         if on_progress is not None:
             on_progress(target.name, result.pages, len(result.messages))
     total = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+    from teams_reader import logs
+
+    logs.get("sync").debug("synced %d chats: %d new, %d stored", synced, added, total)
     return BackfillSummary(chats_synced=synced, new_messages=added, total_messages=total)
 
 
@@ -178,12 +183,11 @@ def backfill(
             from teams_reader.browser.autologin import make_autologin
 
             template_url, headers = session.capture_request(
-                context, timeout_ms=timeout_ms, autologin=make_autologin()
+                context, timeout_ms=timeout_ms, autologin=make_autologin(), can_prompt=not headless
             )
-            page = context.pages[0] if context.pages else context.new_page()
-            session.settle(page)
+            session.park(context.pages[0] if context.pages else context.new_page())
             return sync_with(
-                conn, lambda url: session.fetch_json(page, url, headers), template_url,
+                conn, lambda url: session.fetch_api(context, url, headers), template_url,
                 chat_filter=chat_filter, full=full, max_pages=max_pages, on_progress=on_progress,
             )
         finally:

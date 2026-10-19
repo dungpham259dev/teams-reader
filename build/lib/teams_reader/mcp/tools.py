@@ -96,7 +96,9 @@ def resolve_chat(conn: sqlite3.Connection, name_or_id: str) -> str | None:
 
 def list_chats(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     names = chat_names(conn)
-    return [
+    pending = db_mod.get_state(conn, "cache_account_pending")
+    notice = [{"notice": f"Desktop cache not read: {pending}"}] if pending else []
+    return notice + [
         {
             "chat_id": r["chat_id"],
             "display_name": names[r["chat_id"]],

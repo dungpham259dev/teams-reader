@@ -80,7 +80,8 @@ def download_images(
         try:
             from teams_reader.browser.autologin import make_autologin
 
-            session.capture_request(context, autologin=make_autologin())  # logged in + warm cookies
+            # logged in + warm cookies
+            session.capture_request(context, autologin=make_autologin(), can_prompt=not headless)
             return download_with(conn, context, chat=chat, msg_ids=msg_ids, limit=limit)
         finally:
             context.close()

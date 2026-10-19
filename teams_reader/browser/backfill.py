@@ -152,6 +152,9 @@ def sync_with(
         if on_progress is not None:
             on_progress(target.name, result.pages, len(result.messages))
     total = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+    from teams_reader import logs
+
+    logs.get("sync").debug("synced %d chats: %d new, %d stored", synced, added, total)
     return BackfillSummary(chats_synced=synced, new_messages=added, total_messages=total)
 
 

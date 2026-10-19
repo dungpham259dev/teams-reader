@@ -6,6 +6,7 @@ is a local SOCKS5 proxy; Chromium reaches Teams and chatsvc through it.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,64 @@ async ({url, headers}) => {
     }
 }
 """
+
+
+# The reader must never act as the user: no read receipts ("Seen"), no presence
+# or activity reports. The Teams web app tries these on its own once it opens a
+# chat, so they are refused at the network layer for every page we drive.
+_BLOCKED_WRITES = re.compile(
+    r"consumptionhorizon|reportmyactivity|presenceDocs|forceavailability|setpresence|/endpoints/[^/]+/active",
+    re.IGNORECASE,
+)
+
+
+def blocks_write(method: str, url: str) -> bool:
+    return method.upper() != "GET" and bool(_BLOCKED_WRITES.search(url))
+
+
+def _guard_writes(context: Any) -> None:
+    def handle(route: Any) -> None:
+        if blocks_write(route.request.method, route.request.url):
+            from teams_reader import logs
+
+            logs.get("guard").info("blocked %s %s (read-only)", route.request.method,
+                                   route.request.url.split("?")[0][-80:])
+            route.abort()
+        else:
+            route.continue_()
+
+    context.route(_BLOCKED_WRITES, handle)
+
+
+def fetch_api(context: Any, url: str, headers: dict[str, str], timeout_ms: int = 60_000) -> object:
+    """GET a chatsvc URL outside any page (the Teams app need not be running)."""
+    try:
+        response = context.request.get(url, headers=headers, timeout=timeout_ms)
+    except Exception as exc:  # noqa: BLE001 - same error shape as the in-page fetch
+        return {"error": str(exc)}
+    if not response.ok:
+        return {"error": response.status}
+    return response.json()
+
+
+def park(page: Any) -> None:
+    """Unload the Teams app once auth is captured, so no chat stays open."""
+    try:
+        page.goto("about:blank")
+    except Exception:  # noqa: BLE001 - parking is best-effort; writes stay blocked anyway
+        pass
+
+
+def sign_in_blocker(require_session: bool, autologin: Any, can_prompt: bool) -> str | None:
+    """Why a sign-in page cannot be completed here (None = it can be)."""
+    if require_session:
+        return "Teams session expired; call sync_history or run `teams-reader login`"
+    if autologin is None and not can_prompt:
+        return (
+            "Teams web sign-in is needed and no credentials are configured; "
+            "run `teams-reader login` to sign in once in a visible window"
+        )
+    return None
 
 
 def proxy_server() -> str | None:
@@ -53,6 +112,7 @@ def launch_context(playwright: Any, headless: bool = False) -> Any:
         lock.release()
         raise
     context.on("close", lambda _ctx: lock.release())
+    _guard_writes(context)
     return context
 
 
@@ -90,13 +150,14 @@ def capture_request(
     timeout_ms: int = 180_000,
     autologin: Any = None,
     require_session: bool = False,
+    can_prompt: bool = True,
 ) -> tuple[str, dict[str, str]]:
     """Navigate to Teams and capture a chatsvc request's URL template + headers.
 
     Prefers a real ``/messages`` call (exact template), but falls back to the
     conversations-list call that always fires on boot, constructing a messages
     template from its host. The headers (session auth token) are replayed later
-    by :func:`fetch_json`. On timeout it saves a screenshot for diagnosis.
+    by :func:`fetch_api`. On timeout it saves a screenshot for diagnosis.
 
     On a sign-in page: ``autologin`` (an :class:`AutoLogin`) fills it in step by
     step; with ``require_session`` (background work) it fails fast instead, so
@@ -116,11 +177,19 @@ def capture_request(
         elif chatsvc.is_conversations_url(url):
             captured.setdefault("conversations", req)
 
+    failed_navigation: dict[str, str] = {}
+
+    def on_request_failed(req: Any) -> None:
+        if req.is_navigation_request():
+            failed_navigation["url"], failed_navigation["error"] = req.url, str(req.failure)
+
     context.on("request", on_request)
+    context.on("requestfailed", on_request_failed)
     page = _page_for(context)
     start = time.monotonic()
     last_reload_ms = 0.0
     conv_seen_ms: float | None = None
+    signing_in = False
     _open(page)
     try:
         while "messages" not in captured:
@@ -139,30 +208,56 @@ def capture_request(
                     where = f" (page at: {page.url})"
                 except Exception:  # noqa: BLE001
                     pass
+                hint = (
+                    "Log in in the window, or re-run `teams-reader login`." if can_prompt
+                    else "Not signed in yet? Run `teams-reader login` (this browser has no window)."
+                )
                 raise TimeoutError(
-                    "No chatsvc request seen; saved a screenshot to "
-                    f"{_fail_screenshot()}. Log in in the window, or re-run "
-                    f"`teams-reader login`.{where}"
+                    f"Teams did not load; saved a screenshot to {_fail_screenshot()}. {hint}{where}"
+                )
+            if page.url.startswith("chrome-error://") and failed_navigation:
+                raise autologin_mod.LoginFailed(
+                    autologin_mod.navigation_failure_message(failed_navigation["url"], failed_navigation["error"])
                 )
             if autologin_mod.on_login_page(page.url):
-                if require_session:
-                    raise LoginRequired(
-                        "Teams session expired; call sync_history or run `teams-reader login`"
-                    )
+                blocker = sign_in_blocker(require_session, autologin, can_prompt)
+                if blocker:
+                    raise LoginRequired(blocker)  # a hidden page nobody can sign in to
+                if not signing_in:
+                    signing_in = True
+                    start = time.monotonic()  # fresh budget for sign-in (incl. MFA)
+                    _signin_log().info("Teams sent the browser to sign in (%s)",
+                                       "auto sign-in" if autologin is not None else "waiting for you in the window")
                 if autologin is not None:
                     autologin.step(page, autologin_mod.visible_keys(page), autologin_mod.read_text(page))
+                page.wait_for_timeout(1_000)
+                continue  # never reload mid sign-in
+            if signing_in:
+                # Signed in: give the app (a cold first boot over a VPN) a fresh budget.
+                _signin_log().info("signed in after %.0fs; waiting for Teams to load", time.monotonic() - start)
+                signing_in = False
+                start = time.monotonic()
+                last_reload_ms = 0.0
+                continue
             if elapsed_ms - last_reload_ms >= _RELOAD_EVERY_MS:
                 last_reload_ms = elapsed_ms
                 _open(page)
             page.wait_for_timeout(1_000)
     finally:
         context.remove_listener("request", on_request)
+        context.remove_listener("requestfailed", on_request_failed)
 
     if "messages" in captured:
         request = captured["messages"]
         return request.url, _clean_headers(request.all_headers())
     request = captured["conversations"]
     return chatsvc.messages_template(request.url), _clean_headers(request.all_headers())
+
+
+def _signin_log():
+    from teams_reader import logs
+
+    return logs.get("signin")
 
 
 def _fail_screenshot() -> Path:

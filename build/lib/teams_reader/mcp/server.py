@@ -7,10 +7,12 @@ not, so it stays unit-testable on its own.
 from __future__ import annotations
 
 import atexit
+import functools
 import threading
+import time
 from pathlib import Path
 
-from teams_reader import config, refresh
+from teams_reader import config, logs, refresh
 from teams_reader.mcp import livesync, tools
 from teams_reader.store import db as db_mod
 
@@ -39,6 +41,28 @@ def build_server(db_path: Path | None = None):
     db_file = db_path or config.db_path()
     conn = db_mod.connect(db_file)
     server = _server_class()("teams-reader")
+    log = logs.get("mcp")
+    log.info("server ready (store %s, live sync %s)", db_file, "on" if livesync.enabled() else "off")
+    register = server.tool
+
+    def logged_tool(**options):
+        def decorate(fn):
+            @functools.wraps(fn)
+            def call(*args, **kwargs):
+                start = time.monotonic()
+                try:
+                    result = fn(*args, **kwargs)
+                except Exception as exc:
+                    log.warning("%s(%s) failed after %.1fs: %s", fn.__name__,
+                                logs.short_args(args, kwargs), time.monotonic() - start, exc)
+                    raise
+                log.info("%s(%s) -> %s in %.2fs", fn.__name__, logs.short_args(args, kwargs),
+                         logs.summarize(result), time.monotonic() - start)
+                return result
+            return register(**options)(call)
+        return decorate
+
+    server.tool = logged_tool
 
     # Tool calls run on worker threads and share one sqlite connection.
     lock = threading.Lock()

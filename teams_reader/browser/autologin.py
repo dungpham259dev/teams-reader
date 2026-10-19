@@ -191,6 +191,11 @@ class AutoLogin:
         stops the flow instead of resubmitting forever.
         """
         state = detect_state(page.url, present)
+        if state != getattr(self, "_logged", None) and state not in ("waiting", "settling"):
+            from teams_reader import logs
+
+            logs.get("signin").info("sign-in screen: %s", state)
+            self._logged = state
         if state == "error":
             raise LoginFailed(
                 f"sign-in rejected: {read_text(SELECTORS['ms_error'])[:200]} "

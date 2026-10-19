@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from teams_reader import cli
@@ -211,7 +213,7 @@ def test_register_replaces_an_existing_server_only_when_confirmed(monkeypatch):
 @pytest.fixture()
 def two_profiles(tmp_path, monkeypatch):
     path = tmp_path / "config.toml"
-    path.write_text('default_profile = "a"\n\n[profiles.a]\ncache = "none"\n\n[profiles.b]\ncache = "none"\n')
+    path.write_text(f'default_profile = "a"\n\n[profiles.a]\ncache = "none"\ndata_dir = "{tmp_path}/a"\n\n[profiles.b]\ncache = "none"\n')
     monkeypatch.setenv("TEAMS_READER_CONFIG", str(path))
     return path
 
@@ -240,3 +242,20 @@ def test_use_repairs_a_config_whose_default_is_gone(two_profiles):
 def test_use_unknown_profile_fails(two_profiles, capsys):
     assert cli.main(["use", "zzz"]) == 1
     assert "known: a, b" in capsys.readouterr().err
+
+
+@pytest.mark.unit
+def test_commands_write_the_activity_log(two_profiles, capsys):
+    from teams_reader import logs
+
+    cli.main(["config"])
+    path = logs.log_path()
+    for handler in logging.getLogger("teams_reader").handlers:
+        handler.flush()
+    assert "teams-reader config (profile a)" in path.read_text()
+
+
+@pytest.mark.unit
+def test_logs_without_a_log_explains(two_profiles, capsys):
+    assert cli.main(["logs"]) == 1
+    assert "No log yet" in capsys.readouterr().err

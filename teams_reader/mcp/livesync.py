@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from teams_reader import logs
 from teams_reader.browser.backfill import sync_with
 from teams_reader.browser.live import LiveBrowser, PlaywrightSession, should_sync
 from teams_reader.store import db as db_mod
@@ -21,6 +22,7 @@ DEFAULT_INTERVAL = 30.0
 DEFAULT_IDLE_AFTER = 900.0
 _BACKOFF_CAP = 600.0
 _BACKGROUND_MAX_PAGES = 20
+_log = logs.get("sync")
 
 
 def backoff(interval: float, failures: int, cap: float = _BACKOFF_CAP) -> float:
@@ -103,6 +105,7 @@ class LiveSync:
     def _ensure_browser(self) -> Any:
         with self._guard:
             if self._browser is None:
+                _log.info("starting the warm browser")
                 self._browser = self._factory()
             return self._browser
 
@@ -119,10 +122,15 @@ class LiveSync:
             if not should_sync(now, self._last_use, self._last_sync, interval, self._idle_after):
                 continue
             try:
-                self.sync(interactive=False, max_pages=_BACKGROUND_MAX_PAGES)
+                summary = self.sync(interactive=False, max_pages=_BACKGROUND_MAX_PAGES)
+                _log.info("background sync: %s chats changed, %s new messages (%.1fs)",
+                          getattr(summary, "chats_synced", "?"), getattr(summary, "new_messages", "?"),
+                          time.monotonic() - now)
                 self._last_error = None
                 self._failures = 0
             except Exception as exc:  # noqa: BLE001 - reported via status(), retried later
                 self._last_error = str(exc)[:300]
                 self._failures += 1
+                _log.warning("background sync failed (%d in a row; next try in %ds): %s", self._failures,
+                             backoff(self._interval, self._failures), self._last_error)
             self._last_sync = time.monotonic()

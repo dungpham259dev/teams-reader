@@ -231,3 +231,37 @@ def test_interactive_flag_reaches_the_opener():
         assert seen == [False, True]
     finally:
         browser.close()
+
+
+@pytest.mark.unit
+def test_failed_open_closes_the_context_so_the_profile_lock_is_freed(monkeypatch):
+    import playwright.sync_api as pw_api
+
+    from teams_reader.browser import live as live_mod
+    from teams_reader.browser import session as session_mod
+
+    events = []
+
+    class FakeContext:
+        pages = []
+
+        def close(self):
+            events.append("context closed")
+
+    class FakePlaywright:
+        def start(self):
+            return self
+
+        def stop(self):
+            events.append("playwright stopped")
+
+    def no_capture(*args, **kwargs):
+        raise TimeoutError("No chatsvc request seen")
+
+    monkeypatch.setattr(pw_api, "sync_playwright", lambda: FakePlaywright())
+    monkeypatch.setattr(session_mod, "launch_context", lambda pw, headless: FakeContext())
+    monkeypatch.setattr(session_mod, "capture_request", no_capture)
+
+    with pytest.raises(TimeoutError):
+        live_mod.PlaywrightSession(interactive=False)
+    assert events == ["context closed", "playwright stopped"]

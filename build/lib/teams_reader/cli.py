@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import shutil
 import subprocess
+import os
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -166,14 +167,16 @@ def _mcp_exists(name: str) -> bool:
                            stderr=subprocess.DEVNULL) == 0
 
 
-def _register_mcp(cmd: list[str], ask=input, exists=_mcp_exists) -> None:
+def _register_mcp(cmd: list[str], ask=input, exists=_mcp_exists):
+    from teams_reader.setup_wizard import StepResult
+
     name = cmd[cmd.index("--") - 1]
     if exists(name):
         if not ask(f"Claude Code already has an MCP server {name!r}. Replace it? [y/N]: ").strip().lower().startswith("y"):
-            print(f"Kept the existing {name!r}.")
-            return
+            return StepResult(True, f"kept the existing {name!r}")
         subprocess.call(["claude", "mcp", "remove", "--scope", "user", name])
-    subprocess.call(cmd)
+    code = subprocess.call(cmd)
+    return StepResult(code == 0, f"registered as {name!r}" if code == 0 else f"`{' '.join(cmd)}` failed")
 
 
 def _installed_exe() -> str:
@@ -183,17 +186,16 @@ def _installed_exe() -> str:
 
 
 def _cmd_setup(_: argparse.Namespace) -> int:
-    from teams_reader import setup_wizard
+    from teams_reader import setup_steps, setup_wizard
 
     print("teams-reader setup: press Enter to accept the [default].\n")
-    exe = _installed_exe()
-    setup_wizard.run(
-        ask=input,
-        say=print,
+    steps = setup_wizard.SetupSteps(
+        read_cache=setup_steps.read_cache,
+        connect=setup_steps.connect,
         register=_register_mcp,
-        login=lambda name: subprocess.call([exe, "--profile", name, "login"]),
-        exe=exe,
+        claude_available=lambda: shutil.which("claude") is not None,
     )
+    setup_wizard.run(ask=input, say=print, steps=steps, exe=_installed_exe())
     print("\nDone. Restart Claude Code (or run /mcp) and ask it about your Teams chats.")
     return 0
 
@@ -204,6 +206,37 @@ def _cmd_config(_: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_profiles(_: argparse.Namespace) -> int:
+    names, default = settings.list_profiles()
+    for name in names:
+        print(f"{'*' if name == default else ' '} {name}")
+    return 0
+
+
+def _cmd_use(args: argparse.Namespace) -> int:
+    try:
+        path = settings.set_default_profile(args.name)
+    except settings.ConfigError as exc:
+        print(f"teams-reader: {exc}", file=sys.stderr)
+        return 1
+    print(f"Default profile is now {args.name!r} ({path}).")
+    print("Run /mcp in Claude Code (or restart it) so the teams-reader server switches.")
+    return 0
+
+
+def _cmd_logs(args: argparse.Namespace) -> int:
+    from teams_reader import logs
+
+    path = logs.log_path()
+    if not path.is_file():
+        print(f"No log yet at {path}. It starts with the MCP server or a browser command.", file=sys.stderr)
+        return 1
+    print(f"==> {path}", file=sys.stderr, flush=True)
+    tail = ["tail", "-n", str(args.lines)] + (["-F"] if args.follow else []) + [str(path)]
+    os.execvp("tail", tail)
+    return 0  # not reached
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="teams-reader")
     parser.add_argument("--profile", default=None, help="config profile to use (default: config default_profile)")
@@ -211,6 +244,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("setup", help="interactive first-run setup (config + Claude Code)").set_defaults(func=_cmd_setup)
     sub.add_parser("config", help="show the active profile's settings").set_defaults(func=_cmd_config)
+    sub.add_parser("profiles", help="list profiles (* = default)").set_defaults(func=_cmd_profiles, profile_free=True)
+    use = sub.add_parser("use", help="make a profile the default")
+    use.add_argument("name")
+    use.set_defaults(func=_cmd_use, profile_free=True)
+    show_logs = sub.add_parser("logs", help="show the activity log (-f to follow it live)")
+    show_logs.add_argument("-f", "--follow", action="store_true")
+    show_logs.add_argument("-n", "--lines", type=int, default=40)
+    show_logs.set_defaults(func=_cmd_logs, quiet=True)
     sub.add_parser("install-browser", help="download the Chromium build the browser features use").set_defaults(
         func=_cmd_install_browser
     )
@@ -261,10 +302,16 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    try:
-        settings.activate(args.profile)
-    except settings.ConfigError as exc:
-        parser.error(str(exc))
+    if not getattr(args, "profile_free", False):
+        try:
+            settings.activate(args.profile)
+        except settings.ConfigError as exc:
+            parser.error(str(exc))
+        if not getattr(args, "quiet", False):
+            from teams_reader import logs
+
+            logs.setup()
+            logs.get("cli").info("teams-reader %s (profile %s)", args.command, settings.active().name)
     return args.func(args)
 
 

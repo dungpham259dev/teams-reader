@@ -11,11 +11,12 @@ from pathlib import Path
 from typing import Callable
 
 from teams_reader import settings
+from teams_reader.cache import accounts as accounts_mod
 from teams_reader.cache import dump as dump_mod
 from teams_reader.cache import locate as locate_mod
 from teams_reader.cache import snapshot as snapshot_mod
 from teams_reader.parse.conversations import resolve_names
-from teams_reader.parse.decode import decoded_values
+from teams_reader.parse.decode import decode_stream, unwrap
 from teams_reader.parse.messages import extract_messages
 from teams_reader.store import db as db_mod
 
@@ -30,10 +31,20 @@ class IngestResult:
     last_ts: int
 
 
-def ingest_from_dump(conn: sqlite3.Connection, dump_path: Path) -> IngestResult:
-    """Parse a dfindexeddb JSONL dump and upsert it into the store."""
+def ingest_from_dump(
+    conn: sqlite3.Connection, dump_path: Path, account: str | None = None
+) -> IngestResult:
+    """Parse a dfindexeddb JSONL dump and upsert it into the store.
+
+    A cache shared by several accounts is narrowed to this profile's account
+    (see :mod:`teams_reader.cache.accounts`).
+    """
     raw = Path(dump_path).read_text(encoding="utf-8")
-    values = list(decoded_values(raw))
+    records = [r for r in decode_stream(raw) if isinstance(r, dict)]
+    chosen = accounts_mod.resolve(conn, records, account)
+    if chosen:
+        records = accounts_mod.records_for(records, chosen)
+    values = [unwrap(r["value"]) for r in records if "value" in r]
 
     messages = extract_messages(values)
     new_count = db_mod.upsert_messages(conn, messages)
@@ -76,4 +87,4 @@ def ingest(
     work.mkdir(parents=True, exist_ok=True)
     snap = snapshot_fn(leveldb, work / "snapshot")
     dump_path = dump_fn(snap, work / "dump.jsonl")
-    return ingest_from_dump(conn, dump_path)
+    return ingest_from_dump(conn, dump_path, account=settings.active().account)

@@ -119,11 +119,21 @@ actions you start. MFA still needs your phone, and the number shows as a macOS
 notification. A rejected password is never retried. Background sync never
 signs in; it reports `login required` instead.
 
+## Activity log
+
+Each profile keeps a log of what the reader does: tool calls with their
+arguments, sizes and timings, desktop cache reads, the warm browser, background
+sync, sign-in screens, and write requests it blocked. It never holds message
+text, tokens or passwords. Follow it live with `teams-reader logs -f` (it lives
+in the profile's data folder under `logs/`, rotated at 1 MB; set
+`TEAMS_READER_LOG_LEVEL=DEBUG` for more detail).
+
 ## CLI
 
 ```bash
 teams-reader setup              # add or change a profile, sign in, register with Claude
 teams-reader profiles | use NAME | config
+teams-reader logs -f            # follow the activity log live
 teams-reader login              # sign in to Teams web (opens a window)
 teams-reader backfill [--full] [--chat NAME] [--max-pages N]
 teams-reader ingest | daemon    # read the desktop cache once / every 45s

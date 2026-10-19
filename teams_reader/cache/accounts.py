@@ -14,6 +14,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+from teams_reader import logs
 from teams_reader.parse.decode import unwrap
 from teams_reader.parse.messages import extract_messages
 from teams_reader.store import db as db_mod
@@ -23,6 +24,9 @@ PENDING_STATE = "cache_account_pending"
 _MESSAGE_DB = "Teams:replychain-manager:"
 _GUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 _DB_RE = re.compile(rf"react-web-client:({_GUID}):(?:8:orgid:)?({_GUID}):", re.IGNORECASE)
+
+
+_log = logs.get("accounts")
 
 
 class MixedCacheError(RuntimeError):
@@ -116,9 +120,11 @@ def resolve(conn: sqlite3.Connection, records: list[Any], configured: str | None
     remembered = db_mod.get_state(conn, ACCOUNT_STATE)
     if remembered in users:
         db_mod.delete_state(conn, PENDING_STATE)
+        _log.debug("cache shared by %d accounts; reading %s (remembered)", len(found), remembered)
         return remembered
     matched = match_account(found, db_mod.web_chat_ids(conn))
     if matched:
+        _log.info("cache shared by %d accounts; matched %s by its web chats", len(found), matched)
         db_mod.set_state(conn, ACCOUNT_STATE, matched)
         db_mod.delete_state(conn, PENDING_STATE)
         return matched

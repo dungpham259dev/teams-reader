@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import shutil
 import subprocess
+import os
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -223,6 +224,19 @@ def _cmd_use(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_logs(args: argparse.Namespace) -> int:
+    from teams_reader import logs
+
+    path = logs.log_path()
+    if not path.is_file():
+        print(f"No log yet at {path}. It starts with the MCP server or a browser command.", file=sys.stderr)
+        return 1
+    print(f"==> {path}", file=sys.stderr, flush=True)
+    tail = ["tail", "-n", str(args.lines)] + (["-F"] if args.follow else []) + [str(path)]
+    os.execvp("tail", tail)
+    return 0  # not reached
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="teams-reader")
     parser.add_argument("--profile", default=None, help="config profile to use (default: config default_profile)")
@@ -234,6 +248,10 @@ def build_parser() -> argparse.ArgumentParser:
     use = sub.add_parser("use", help="make a profile the default")
     use.add_argument("name")
     use.set_defaults(func=_cmd_use, profile_free=True)
+    show_logs = sub.add_parser("logs", help="show the activity log (-f to follow it live)")
+    show_logs.add_argument("-f", "--follow", action="store_true")
+    show_logs.add_argument("-n", "--lines", type=int, default=40)
+    show_logs.set_defaults(func=_cmd_logs, quiet=True)
     sub.add_parser("install-browser", help="download the Chromium build the browser features use").set_defaults(
         func=_cmd_install_browser
     )
@@ -289,6 +307,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             settings.activate(args.profile)
         except settings.ConfigError as exc:
             parser.error(str(exc))
+        if not getattr(args, "quiet", False):
+            from teams_reader import logs
+
+            logs.setup()
+            logs.get("cli").info("teams-reader %s (profile %s)", args.command, settings.active().name)
     return args.func(args)
 
 

@@ -47,6 +47,10 @@ def blocks_write(method: str, url: str) -> bool:
 def _guard_writes(context: Any) -> None:
     def handle(route: Any) -> None:
         if blocks_write(route.request.method, route.request.url):
+            from teams_reader import logs
+
+            logs.get("guard").info("blocked %s %s (read-only)", route.request.method,
+                                   route.request.url.split("?")[0][-80:])
             route.abort()
         else:
             route.continue_()
@@ -204,10 +208,12 @@ def capture_request(
                     where = f" (page at: {page.url})"
                 except Exception:  # noqa: BLE001
                     pass
+                hint = (
+                    "Log in in the window, or re-run `teams-reader login`." if can_prompt
+                    else "Not signed in yet? Run `teams-reader login` (this browser has no window)."
+                )
                 raise TimeoutError(
-                    "No chatsvc request seen; saved a screenshot to "
-                    f"{_fail_screenshot()}. Log in in the window, or re-run "
-                    f"`teams-reader login`.{where}"
+                    f"Teams did not load; saved a screenshot to {_fail_screenshot()}. {hint}{where}"
                 )
             if page.url.startswith("chrome-error://") and failed_navigation:
                 raise autologin_mod.LoginFailed(
@@ -220,12 +226,15 @@ def capture_request(
                 if not signing_in:
                     signing_in = True
                     start = time.monotonic()  # fresh budget for sign-in (incl. MFA)
+                    _signin_log().info("Teams sent the browser to sign in (%s)",
+                                       "auto sign-in" if autologin is not None else "waiting for you in the window")
                 if autologin is not None:
                     autologin.step(page, autologin_mod.visible_keys(page), autologin_mod.read_text(page))
                 page.wait_for_timeout(1_000)
                 continue  # never reload mid sign-in
             if signing_in:
                 # Signed in: give the app (a cold first boot over a VPN) a fresh budget.
+                _signin_log().info("signed in after %.0fs; waiting for Teams to load", time.monotonic() - start)
                 signing_in = False
                 start = time.monotonic()
                 last_reload_ms = 0.0
@@ -243,6 +252,12 @@ def capture_request(
         return request.url, _clean_headers(request.all_headers())
     request = captured["conversations"]
     return chatsvc.messages_template(request.url), _clean_headers(request.all_headers())
+
+
+def _signin_log():
+    from teams_reader import logs
+
+    return logs.get("signin")
 
 
 def _fail_screenshot() -> Path:

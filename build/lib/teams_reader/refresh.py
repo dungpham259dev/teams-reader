@@ -14,15 +14,18 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from teams_reader import logs
 from teams_reader.cache import locate
+from teams_reader.cache.accounts import MixedCacheError
 from teams_reader.ingest import ingest
 from teams_reader.store import db as db_mod
 
 _FINGERPRINT_KEY = "cache_fingerprint"
 # Bump when parsing/storage changes so an unchanged cache is re-ingested once.
-PARSER_VERSION = 4
+PARSER_VERSION = 5
 
 DEFAULT_MIN_INTERVAL = 3.0
+_log = logs.get("cache")
 
 _state: dict[str, object] = {"last": 0.0, "fingerprint": None, "leveldb": None}
 
@@ -76,12 +79,20 @@ def maybe_refresh(
         fingerprint = fingerprint_fn() if fingerprint_fn is not None else None
         if fingerprint is not None and fingerprint == _last_fingerprint(conn):
             return False
-        ingest_fn(conn)
+        started = time.monotonic()
+        try:
+            result = ingest_fn(conn)
+            new = getattr(result, "new_messages", None)
+            _log.info("desktop cache read: %s new, %s stored (%.1fs)", new, getattr(result, "total_messages", "?"),
+                      time.monotonic() - started)
+        except MixedCacheError as exc:
+            _log.warning("desktop cache not read: %s", exc)  # retried after a web sync (set_web_chats)
         if fingerprint is not None:
             _state["fingerprint"] = fingerprint
             if conn is not None:
                 db_mod.set_state(conn, _FINGERPRINT_KEY, fingerprint)
-    except Exception:  # noqa: BLE001 - a failed refresh must not break the query
+    except Exception as exc:  # noqa: BLE001 - a failed refresh must not break the query
+        _log.warning("desktop cache refresh failed: %s", exc)
         return False
     return True
 

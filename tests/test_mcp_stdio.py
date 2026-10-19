@@ -24,6 +24,10 @@ async def _query(db_file: Path):
     from mcp.client.stdio import StdioServerParameters, stdio_client
 
     env = dict(os.environ)
+    # The child process has its own settings: keep its data (and log) in the temp dir.
+    config = db_file.parent / "config.toml"
+    config.write_text(f'[profiles.default]\ncache = "none"\ndata_dir = "{db_file.parent}"\n')
+    env["TEAMS_READER_CONFIG"] = str(config)
     env["TEAMS_READER_DB"] = str(db_file)
     env["TEAMS_READER_NO_REFRESH"] = "1"  # don't touch the real cache in tests
     params = StdioServerParameters(command=str(_CLI), args=["mcp"], env=env)

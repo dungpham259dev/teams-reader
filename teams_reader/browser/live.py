@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 from concurrent.futures import Future
 from typing import Any, Callable, Protocol
 
@@ -48,6 +49,12 @@ def should_sync(
     if last_use is None or now - last_use > idle_after:
         return False
     return last_sync is None or now - last_sync >= interval
+
+
+def _log():
+    from teams_reader import logs
+
+    return logs.get("browser")
 
 
 class LiveBrowser:
@@ -109,10 +116,12 @@ class LiveBrowser:
         try:
             return job(self._ensure(interactive))
         except AuthExpired:
+            _log().info("Teams session expired; reopening the browser")
             self._drop_session()
             return job(self._ensure(interactive))
         except Exception:
             if not self._alive():
+                _log().warning("the browser died; it reopens on the next job")
                 self._drop_session()  # crashed browser: reopen on the next job
             raise
 
@@ -127,11 +136,20 @@ class LiveBrowser:
 
     def _ensure(self, interactive: bool) -> Session:
         if self._session is None:
-            self._session = self._opener(interactive)  # failures propagate; retried next job
+            started = time.monotonic()
+            _log().info("opening the reader browser (%s)", "may sign in" if interactive else "background, never signs in")
+            try:
+                self._session = self._opener(interactive)  # failures propagate; retried next job
+            except Exception as exc:
+                _log().warning("browser could not open after %.0fs: %s", time.monotonic() - started, exc)
+                raise
+            _log().info("browser ready in %.0fs; Teams API captured, page parked on about:blank",
+                        time.monotonic() - started)
         return self._session
 
     def _drop_session(self) -> None:
         if self._session is not None:
+            _log().info("closing the reader browser")
             try:
                 self._session.close()
             finally:
@@ -166,6 +184,12 @@ class PlaywrightSession:
             self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
             session.park(self.page)  # API calls below need no running Teams app
         except BaseException:
+            context = getattr(self, "context", None)
+            if context is not None:
+                try:
+                    context.close()  # releases the profile lock for the next attempt
+                except Exception:  # noqa: BLE001 - still stop Playwright below
+                    pass
             self._pw.stop()
             raise
 

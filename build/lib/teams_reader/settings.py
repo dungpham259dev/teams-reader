@@ -13,6 +13,7 @@
     live_sync = true                    # warm browser + background sync in the MCP server
     autologin = true
     data_dir = "~/somewhere"            # default: <app support>/profiles/<name>
+    account = "<user id>"               # only when several work accounts share the cache
 
 Each profile has its own store, browser profile and images, so one MCP server
 per profile (``teams-reader --profile NAME mcp``) keeps accounts apart. With no
@@ -23,6 +24,7 @@ selected profile.
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -50,6 +52,7 @@ class Profile:
     password_key: str = "PASSWORD"
     live_sync: bool = True
     autologin: bool = True
+    account: str | None = None
     db_override: Path | None = None
 
     @property
@@ -105,6 +108,7 @@ def _from_table(name: str, table: Mapping, default_dir: Path) -> Profile:
         password_key=str(table.get("password_key", "PASSWORD")),
         live_sync=bool(table.get("live_sync", True)),
         autologin=bool(table.get("autologin", True)),
+        account=str(table["account"]).strip().lower() if table.get("account") else None,
     )
 
 
@@ -154,6 +158,39 @@ def load_profile(
     return _apply_env(profile, environ)
 
 
+def list_profiles(config_path: Path | None = None) -> tuple[tuple[str, ...], str]:
+    """The configured profile names and the default one."""
+    data = _read_config(config_path or resolve_config_path())
+    names = tuple(sorted(data.get("profiles") or {})) or (DEFAULT_PROFILE,)
+    return names, data.get("default_profile") or DEFAULT_PROFILE
+
+
+_DEFAULT_LINE_RE = re.compile(r"^default_profile\s*=.*$", re.MULTILINE)
+
+
+def set_default_profile(name: str, config_path: Path | None = None) -> Path:
+    """Point ``default_profile`` at ``name``, editing only that line of the file."""
+    path = config_path or resolve_config_path()
+    names, _ = list_profiles(path)
+    if name not in names:
+        raise ConfigError(f"unknown profile {name!r} in {path} (known: {', '.join(names)})")
+    text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    line = f'default_profile = "{name}"'
+    first_table = re.search(r"^\[", text, re.MULTILINE)
+    head_end = first_table.start() if first_table else len(text)
+    head, tail = text[:head_end], text[head_end:]
+    if _DEFAULT_LINE_RE.search(head):
+        updated = _DEFAULT_LINE_RE.sub(line, head, count=1) + tail
+    else:
+        updated = f"{line}\n\n{text}"
+    tomllib.loads(updated)  # never leave a broken file behind
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(updated, encoding="utf-8")
+    tmp.replace(path)
+    return path
+
+
 _active: dict[str, Profile | None] = {"profile": None, "name": None}
 
 
@@ -183,6 +220,7 @@ def describe(profile: Profile) -> str:
         ("data", str(profile.data_dir)),
         ("store", str(profile.db_path)),
         ("cache", profile.cache),
+        ("account", profile.account or "auto (from Teams web)"),
         ("proxy", profile.proxy or "direct"),
         ("credentials", str(profile.credentials_env) if profile.credentials_env else "none (no auto sign-in)"),
         ("live sync", "on" if profile.live_sync else "off"),
