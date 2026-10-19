@@ -73,6 +73,18 @@ def park(page: Any) -> None:
         pass
 
 
+def sign_in_blocker(require_session: bool, autologin: Any, can_prompt: bool) -> str | None:
+    """Why a sign-in page cannot be completed here (None = it can be)."""
+    if require_session:
+        return "Teams session expired; call sync_history or run `teams-reader login`"
+    if autologin is None and not can_prompt:
+        return (
+            "Teams web sign-in is needed and no credentials are configured; "
+            "run `teams-reader login` to sign in once in a visible window"
+        )
+    return None
+
+
 def proxy_server() -> str | None:
     """The active profile's proxy (e.g. a VPN's SOCKS5), or None for direct."""
     return settings.active().proxy
@@ -134,6 +146,7 @@ def capture_request(
     timeout_ms: int = 180_000,
     autologin: Any = None,
     require_session: bool = False,
+    can_prompt: bool = True,
 ) -> tuple[str, dict[str, str]]:
     """Navigate to Teams and capture a chatsvc request's URL template + headers.
 
@@ -201,10 +214,9 @@ def capture_request(
                     autologin_mod.navigation_failure_message(failed_navigation["url"], failed_navigation["error"])
                 )
             if autologin_mod.on_login_page(page.url):
-                if require_session:
-                    raise LoginRequired(
-                        "Teams session expired; call sync_history or run `teams-reader login`"
-                    )
+                blocker = sign_in_blocker(require_session, autologin, can_prompt)
+                if blocker:
+                    raise LoginRequired(blocker)  # a hidden page nobody can sign in to
                 if not signing_in:
                     signing_in = True
                     start = time.monotonic()  # fresh budget for sign-in (incl. MFA)

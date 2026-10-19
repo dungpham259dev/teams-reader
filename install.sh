@@ -2,7 +2,8 @@
 # One-command installer for teams-reader (macOS).
 #   curl -fsSL https://raw.githubusercontent.com/dungpham259dev/teams-reader/main/install.sh | bash
 # Installs dependencies and the CLI, downloads its browser, then runs the
-# interactive `teams-reader setup` (config profile + Claude Code registration).
+# interactive `teams-reader setup` (config, cache read, Teams sign-in + first sync,
+# Claude Code registration).
 set -euo pipefail
 
 SOURCE="${TEAMS_READER_SOURCE:-git+https://github.com/dungpham259dev/teams-reader}"

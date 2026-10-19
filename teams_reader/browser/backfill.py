@@ -178,7 +178,7 @@ def backfill(
             from teams_reader.browser.autologin import make_autologin
 
             template_url, headers = session.capture_request(
-                context, timeout_ms=timeout_ms, autologin=make_autologin()
+                context, timeout_ms=timeout_ms, autologin=make_autologin(), can_prompt=not headless
             )
             session.park(context.pages[0] if context.pages else context.new_page())
             return sync_with(

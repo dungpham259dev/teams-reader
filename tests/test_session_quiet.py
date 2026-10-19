@@ -56,3 +56,11 @@ def test_api_fetch_network_failure_is_an_error_payload():
     ctx = _Context(None)
     ctx.request = _Boom()
     assert "ERR_SOCKS" in session.fetch_api(ctx, "u", {})["error"]
+
+
+@pytest.mark.unit
+def test_hidden_browser_without_credentials_needs_an_explicit_login():
+    assert session.sign_in_blocker(require_session=False, autologin=None, can_prompt=False)
+    assert session.sign_in_blocker(require_session=True, autologin=object(), can_prompt=True)
+    assert session.sign_in_blocker(require_session=False, autologin=object(), can_prompt=False) is None
+    assert session.sign_in_blocker(require_session=False, autologin=None, can_prompt=True) is None

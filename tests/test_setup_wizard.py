@@ -1,9 +1,8 @@
 import tomllib
-from pathlib import Path
 
 import pytest
 
-from teams_reader import settings, setup_wizard
+from teams_reader import setup_wizard
 
 
 @pytest.mark.unit
@@ -77,8 +76,7 @@ def test_wizard_writes_a_profile_from_answers(tmp_path, monkeypatch):
         "",                           # live sync (default yes)
     )
     out = []
-    profile = setup_wizard.run(ask=ask, say=out.append, config_path=cfg, register=lambda *a: None,
-                               login=lambda *a: None, confirm_extras=False)
+    profile = setup_wizard.run(ask=ask, say=out.append, config_path=cfg)
     data = tomllib.loads(cfg.read_text())
     assert data["default_profile"] == "acme"
     assert data["profiles"]["acme"] == {
@@ -102,9 +100,62 @@ def test_wizard_reasks_invalid_answers_and_backs_up_old_config(tmp_path, monkeyp
         "n",                          # no live sync
         "n",                          # don't make it the default
     )
-    setup_wizard.run(ask=ask, say=lambda s: None, config_path=cfg, register=lambda *a: None,
-                     login=lambda *a: None, confirm_extras=False)
+    setup_wizard.run(ask=ask, say=lambda s: None, config_path=cfg)
     data = tomllib.loads(cfg.read_text())
     assert data["default_profile"] == "old"
     assert data["profiles"]["new"] == {"cache": "none", "live_sync": False, "autologin": False}
     assert (tmp_path / "config.toml.bak").read_text().startswith('default_profile = "old"')
+
+
+def _steps(calls, connect_ok=True, claude=True):
+    def read_cache(name):
+        calls.append(("cache", name))
+        return setup_wizard.StepResult(True, "586 messages in 12 chats")
+
+    def connect(name):
+        calls.append(("connect", name))
+        return setup_wizard.StepResult(connect_ok, "15 chats, 666 messages" if connect_ok else "VPN down")
+
+    def register(cmd):
+        calls.append(("register", cmd[5]))
+        return setup_wizard.StepResult(True, "registered")
+
+    return setup_wizard.SetupSteps(read_cache=read_cache, connect=connect, register=register,
+                                   claude_available=lambda: claude)
+
+
+@pytest.mark.unit
+def test_setup_finishes_everything_and_prints_a_summary(tmp_path, monkeypatch):
+    monkeypatch.setattr(setup_wizard, "available_caches", lambda: ["work"])
+    calls, out = [], []
+    ask = _Answers("", "", "n", "n", "", "", "")  # defaults; then: sign in [Y], register [Y]
+    setup_wizard.run(ask=ask, say=out.append, config_path=tmp_path / "c.toml", steps=_steps(calls))
+    assert calls == [("cache", "default"), ("connect", "default"), ("register", "teams-reader")]
+    summary = "\n".join(out)
+    assert "✓ Local cache: 586 messages in 12 chats" in summary
+    assert "✓ Teams web: 15 chats, 666 messages" in summary
+    assert "✓ Claude Code: registered" in summary
+
+
+@pytest.mark.unit
+def test_skipped_or_failed_steps_say_how_to_finish_later(tmp_path, monkeypatch):
+    monkeypatch.setattr(setup_wizard, "available_caches", lambda: [])
+    calls, out = [], []
+    ask = _Answers("work2", "none", "n", "n", "", "n")  # cache none; decline sign-in; no claude CLI
+    setup_wizard.run(ask=ask, say=out.append, config_path=tmp_path / "c.toml",
+                     steps=_steps(calls, claude=False))
+    summary = "\n".join(out)
+    assert calls == []  # no cache to read, sign-in declined, no Claude CLI
+    assert "✗ Teams web: skipped" in summary and "teams-reader --profile work2 login" in summary
+    assert "✗ Claude Code: CLI not found" in summary and "claude mcp add" in summary
+
+
+@pytest.mark.unit
+def test_failed_sign_in_is_reported_not_fatal(tmp_path, monkeypatch):
+    monkeypatch.setattr(setup_wizard, "available_caches", lambda: ["work"])
+    calls, out = [], []
+    ask = _Answers("", "", "n", "n", "", "", "")
+    setup_wizard.run(ask=ask, say=out.append, config_path=tmp_path / "c.toml",
+                     steps=_steps(calls, connect_ok=False))
+    assert "✗ Teams web: VPN down" in "\n".join(out)
+    assert ("register", "teams-reader") in calls

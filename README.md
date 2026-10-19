@@ -105,9 +105,20 @@ curl -fsSL https://raw.githubusercontent.com/dungpham259dev/teams-reader/main/in
 It installs `snappy` and `uv` if missing, installs the `teams-reader` CLI,
 downloads its browser, then runs `teams-reader setup`, which asks a few
 questions (profile name, which Teams cache, proxy/VPN, optional automatic
-re-login, background sync), writes the config, registers the MCP server with
-Claude Code, and offers to sign in to Teams. Re-run `teams-reader setup` any
-time to add or change a profile.
+re-login, background sync), writes the config, and then finishes everything
+so the first question in Claude is fast:
+
+1. reads the Teams desktop cache into the local store;
+2. opens a browser window to sign in to Teams web (auto sign-in if configured;
+   approve MFA on the phone) and downloads every chat's full history, with
+   real chat names;
+3. registers the MCP server with Claude Code.
+
+It ends with a ✓/✗ summary; each skipped or failed step prints the command
+that finishes it later (e.g. `teams-reader login`). Run setup while Claude
+Code is closed: the sign-in step cannot share the browser profile with a
+running MCP server. Re-run `teams-reader setup` any time to add or change a
+profile.
 
 Manual install, if you prefer:
 

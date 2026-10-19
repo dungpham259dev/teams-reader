@@ -10,6 +10,7 @@ import re
 import shutil
 import socket
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit
@@ -155,16 +156,59 @@ def _ask_profile(ask: Ask, say: Say, existing: dict) -> tuple[str, dict]:
     return name, table
 
 
+@dataclass(frozen=True)
+class StepResult:
+    ok: bool
+    detail: str
+
+
+@dataclass(frozen=True)
+class SetupSteps:
+    """The actions that finish a setup, injectable so the flow is testable."""
+
+    read_cache: Callable[[str], StepResult]
+    connect: Callable[[str], StepResult]  # sign in to Teams web + first full sync
+    register: Callable[[list[str]], StepResult]
+    claude_available: Callable[[], bool]
+
+
+def _finish(ask: Ask, say: Say, steps: SetupSteps, name: str, table: dict, cmd: list[str]) -> None:
+    results: list[tuple[str, StepResult]] = []
+    if table["cache"] != "none":
+        say("\nReading the Teams desktop cache...")
+        results.append(("Local cache", steps.read_cache(name)))
+
+    say("\nSyncing from Teams web gives real chat names, full history, images and links,")
+    say("and lets Claude see new messages within ~30s. It opens a browser window to sign in.")
+    if _yes(ask, "Sign in to Teams web now and download your chat history? (recommended)", True):
+        say("A browser window opens; sign in if asked (approve MFA on your phone).")
+        say("It goes blank while history downloads and closes by itself.")
+        results.append(("Teams web", steps.connect(name)))
+    else:
+        results.append(("Teams web", StepResult(False, f"skipped; run `teams-reader --profile {name} login` later")))
+
+    if not steps.claude_available():
+        results.append(("Claude Code", StepResult(False, f"CLI not found; later run: {' '.join(cmd)}")))
+    elif _yes(ask, "Register it with Claude Code now?", True):
+        results.append(("Claude Code", steps.register(cmd)))
+    else:
+        results.append(("Claude Code", StepResult(False, f"skipped; later run: {' '.join(cmd)}")))
+
+    say("\nSetup summary:")
+    for label, result in results:
+        say(f"  {'✓' if result.ok else '✗'} {label}: {result.detail}")
+
+
 def run(
     ask: Ask,
     say: Say,
     config_path: Path | None = None,
-    register: Callable[[list[str]], None] | None = None,
-    login: Callable[[str], None] | None = None,
-    confirm_extras: bool = True,
+    steps: SetupSteps | None = None,
     exe: str | None = None,
 ) -> settings.Profile:
-    """Ask for one profile, save it to the config file, optionally register and log in."""
+    """Ask for one profile and save it; with ``steps``, also read the cache, sign
+    in and sync from Teams web, and register with Claude Code, so later use
+    needs no manual step."""
     path = config_path or settings.resolve_config_path()
     existing = tomllib.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
     name, table = _ask_profile(ask, say, existing)
@@ -180,10 +224,6 @@ def run(
     profile = settings.load_profile(name, config_path=path, environ={})
     say(f"\nSaved {path}:\n{settings.describe(profile)}")
 
-    if confirm_extras and register and shutil.which("claude"):
-        if _yes(ask, "Register it with Claude Code now?", True):
-            register(mcp_add_command(name, exe or "teams-reader", is_default=make_default))
-    if confirm_extras and login and (table.get("live_sync") or table["cache"] == "none"):
-        if _yes(ask, "Sign in to Teams in a browser window now (needed for sync, images, links)?", True):
-            login(name)
+    if steps is not None:
+        _finish(ask, say, steps, name, table, mcp_add_command(name, exe or "teams-reader", is_default=make_default))
     return profile

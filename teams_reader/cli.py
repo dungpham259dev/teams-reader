@@ -166,14 +166,16 @@ def _mcp_exists(name: str) -> bool:
                            stderr=subprocess.DEVNULL) == 0
 
 
-def _register_mcp(cmd: list[str], ask=input, exists=_mcp_exists) -> None:
+def _register_mcp(cmd: list[str], ask=input, exists=_mcp_exists):
+    from teams_reader.setup_wizard import StepResult
+
     name = cmd[cmd.index("--") - 1]
     if exists(name):
         if not ask(f"Claude Code already has an MCP server {name!r}. Replace it? [y/N]: ").strip().lower().startswith("y"):
-            print(f"Kept the existing {name!r}.")
-            return
+            return StepResult(True, f"kept the existing {name!r}")
         subprocess.call(["claude", "mcp", "remove", "--scope", "user", name])
-    subprocess.call(cmd)
+    code = subprocess.call(cmd)
+    return StepResult(code == 0, f"registered as {name!r}" if code == 0 else f"`{' '.join(cmd)}` failed")
 
 
 def _installed_exe() -> str:
@@ -183,17 +185,16 @@ def _installed_exe() -> str:
 
 
 def _cmd_setup(_: argparse.Namespace) -> int:
-    from teams_reader import setup_wizard
+    from teams_reader import setup_steps, setup_wizard
 
     print("teams-reader setup: press Enter to accept the [default].\n")
-    exe = _installed_exe()
-    setup_wizard.run(
-        ask=input,
-        say=print,
+    steps = setup_wizard.SetupSteps(
+        read_cache=setup_steps.read_cache,
+        connect=setup_steps.connect,
         register=_register_mcp,
-        login=lambda name: subprocess.call([exe, "--profile", name, "login"]),
-        exe=exe,
+        claude_available=lambda: shutil.which("claude") is not None,
     )
+    setup_wizard.run(ask=input, say=print, steps=steps, exe=_installed_exe())
     print("\nDone. Restart Claude Code (or run /mcp) and ask it about your Teams chats.")
     return 0
 

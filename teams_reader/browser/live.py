@@ -161,6 +161,7 @@ class PlaywrightSession:
                 self.context, timeout_ms=timeout_ms,
                 autologin=autologin.make_autologin() if interactive else None,
                 require_session=not interactive,
+                can_prompt=not headless,
             )
             self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
             session.park(self.page)  # API calls below need no running Teams app
