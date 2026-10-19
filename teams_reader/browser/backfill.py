@@ -180,10 +180,9 @@ def backfill(
             template_url, headers = session.capture_request(
                 context, timeout_ms=timeout_ms, autologin=make_autologin()
             )
-            page = context.pages[0] if context.pages else context.new_page()
-            session.settle(page)
+            session.park(context.pages[0] if context.pages else context.new_page())
             return sync_with(
-                conn, lambda url: session.fetch_json(page, url, headers), template_url,
+                conn, lambda url: session.fetch_api(context, url, headers), template_url,
                 chat_filter=chat_filter, full=full, max_pages=max_pages, on_progress=on_progress,
             )
         finally:

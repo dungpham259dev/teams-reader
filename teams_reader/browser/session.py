@@ -6,6 +6,7 @@ is a local SOCKS5 proxy; Chromium reaches Teams and chatsvc through it.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,48 @@ async ({url, headers}) => {
     }
 }
 """
+
+
+# The reader must never act as the user: no read receipts ("Seen"), no presence
+# or activity reports. The Teams web app tries these on its own once it opens a
+# chat, so they are refused at the network layer for every page we drive.
+_BLOCKED_WRITES = re.compile(
+    r"consumptionhorizon|reportmyactivity|presenceDocs|forceavailability|setpresence|/endpoints/[^/]+/active",
+    re.IGNORECASE,
+)
+
+
+def blocks_write(method: str, url: str) -> bool:
+    return method.upper() != "GET" and bool(_BLOCKED_WRITES.search(url))
+
+
+def _guard_writes(context: Any) -> None:
+    def handle(route: Any) -> None:
+        if blocks_write(route.request.method, route.request.url):
+            route.abort()
+        else:
+            route.continue_()
+
+    context.route(_BLOCKED_WRITES, handle)
+
+
+def fetch_api(context: Any, url: str, headers: dict[str, str], timeout_ms: int = 60_000) -> object:
+    """GET a chatsvc URL outside any page (the Teams app need not be running)."""
+    try:
+        response = context.request.get(url, headers=headers, timeout=timeout_ms)
+    except Exception as exc:  # noqa: BLE001 - same error shape as the in-page fetch
+        return {"error": str(exc)}
+    if not response.ok:
+        return {"error": response.status}
+    return response.json()
+
+
+def park(page: Any) -> None:
+    """Unload the Teams app once auth is captured, so no chat stays open."""
+    try:
+        page.goto("about:blank")
+    except Exception:  # noqa: BLE001 - parking is best-effort; writes stay blocked anyway
+        pass
 
 
 def proxy_server() -> str | None:
@@ -53,6 +96,7 @@ def launch_context(playwright: Any, headless: bool = False) -> Any:
         lock.release()
         raise
     context.on("close", lambda _ctx: lock.release())
+    _guard_writes(context)
     return context
 
 
@@ -96,7 +140,7 @@ def capture_request(
     Prefers a real ``/messages`` call (exact template), but falls back to the
     conversations-list call that always fires on boot, constructing a messages
     template from its host. The headers (session auth token) are replayed later
-    by :func:`fetch_json`. On timeout it saves a screenshot for diagnosis.
+    by :func:`fetch_api`. On timeout it saves a screenshot for diagnosis.
 
     On a sign-in page: ``autologin`` (an :class:`AutoLogin`) fills it in step by
     step; with ``require_session`` (background work) it fails fast instead, so

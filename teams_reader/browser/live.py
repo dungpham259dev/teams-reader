@@ -163,13 +163,13 @@ class PlaywrightSession:
                 require_session=not interactive,
             )
             self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
-            session.settle(self.page)
+            session.park(self.page)  # API calls below need no running Teams app
         except BaseException:
             self._pw.stop()
             raise
 
     def fetch(self, url: str) -> object:
-        return checked(self._session_mod.fetch_json(self.page, url, self._headers))
+        return checked(self._session_mod.fetch_api(self.context, url, self._headers))
 
     def alive(self) -> bool:
         if self.page.is_closed():
