@@ -68,7 +68,7 @@ Installs from before this command existed update once with:
 
 ```bash
 CPPFLAGS="-I$(brew --prefix snappy)/include" LDFLAGS="-L$(brew --prefix snappy)/lib" \
-  uv tool upgrade teams-reader && teams-reader install-browser
+  uv tool upgrade --reinstall-package teams-reader teams-reader && teams-reader install-browser
 ```
 
 <details>

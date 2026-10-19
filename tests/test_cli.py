@@ -293,7 +293,7 @@ def test_update_upgrades_the_uv_tool_then_the_browser(tmp_path, monkeypatch, cap
     monkeypatch.setattr(cli, "_snappy_flags", lambda: {"CPPFLAGS": "-Ix"})
     monkeypatch.setattr(cli.subprocess, "call", lambda cmd, **kw: calls.append((cmd, kw.get("env", {}).get("CPPFLAGS"))) or 0)
     assert cli.main(["update"]) == 0
-    assert calls[0] == (["uv", "tool", "upgrade", "teams-reader"], "-Ix")
+    assert calls[0] == (["uv", "tool", "upgrade", "--reinstall-package", "teams-reader", "teams-reader"], "-Ix")
     assert calls[1][0][-1] == "install-browser"
     assert "/mcp" in capsys.readouterr().out
 

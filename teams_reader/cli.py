@@ -187,7 +187,9 @@ def _cmd_update(_: argparse.Namespace) -> int:
         return 1
     env = {**os.environ, **_snappy_flags()}
     print("Updating teams-reader from its source...")
-    code = subprocess.call(["uv", "tool", "upgrade", "teams-reader"], env=env)
+    # The version string rarely changes, so plain `upgrade` reports "Nothing to upgrade"
+    # without fetching the new commit; reinstalling the package does.
+    code = subprocess.call(["uv", "tool", "upgrade", "--reinstall-package", "teams-reader", "teams-reader"], env=env)
     if code != 0:
         return code
     print("Updating its browser...")
