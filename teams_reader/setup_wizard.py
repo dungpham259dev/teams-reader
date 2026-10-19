@@ -23,6 +23,21 @@ Ask = Callable[[str], str]
 Say = Callable[[str], None]
 
 DEFAULT_PROXY = "socks5://127.0.0.1:1080"
+
+# Question texts, shared by the terminal flow and scripted (unattended) answers.
+Q_NAME = "Profile name"
+Q_CACHE = "Local cache (work / personal / none / path)"
+Q_USE_PROXY = "Does Teams need a proxy (e.g. a VPN SOCKS port)?"
+Q_PROXY = "Proxy URL"
+Q_AUTOLOGIN = "Sign in again automatically from a .env file when the session expires?"
+Q_ENV = "Path to the .env file"
+Q_EMAIL_KEY = "Email variable name"
+Q_PASSWORD_KEY = "Password variable name"
+Q_LIVE = "Keep a background browser syncing new messages while Claude uses it?"
+Q_DEFAULT = "Make "
+Q_SIGN_IN = "Sign in to Teams web now and download your chat history? (recommended)"
+Q_REGISTER = "Register it with Claude Code now?"
+Q_REPLACE = "Claude Code already has an MCP server"
 _NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _BARE_KEY_RE = _NAME_RE
 
@@ -122,28 +137,28 @@ def _cache_problem(value: str) -> str | None:
 def _ask_profile(ask: Ask, say: Say, existing: dict) -> tuple[str, dict]:
     known = existing.get("profiles") or {}
     name = _ask_until(
-        ask, say, "Profile name", "default" if not known else "",
+        ask, say, Q_NAME, "default" if not known else "",
         lambda v: None if _NAME_RE.match(v) else "use letters, digits, - or _",
     )
     caches = available_caches()
     say(f"Teams caches on this Mac: {', '.join(caches) or 'none found'}")
-    cache = _ask_until(ask, say, "Local cache (work / personal / none / path)", caches[0] if caches else "none",
+    cache = _ask_until(ask, say, Q_CACHE, caches[0] if caches else "none",
                        _cache_problem)
     table: dict = {"cache": cache}
 
-    if _yes(ask, "Does Teams need a proxy (e.g. a VPN SOCKS port)?", False):
-        proxy = _ask_until(ask, say, "Proxy URL", DEFAULT_PROXY, proxy_problem)
+    if _yes(ask, Q_USE_PROXY, False):
+        proxy = _ask_until(ask, say, Q_PROXY, DEFAULT_PROXY, proxy_problem)
         parts = urlsplit(proxy)
         if not port_open(parts.hostname, parts.port):
             say(f"  ! nothing is listening on {parts.hostname}:{parts.port} right now; start the VPN before syncing")
         table["proxy"] = proxy
 
     autologin = False
-    if _yes(ask, "Sign in again automatically from a .env file when the session expires?", False):
+    if _yes(ask, Q_AUTOLOGIN, False):
         while True:
-            path = Path(ask("Path to the .env file: ").strip()).expanduser()
-            email_key = ask("Email variable name [EMAIL]: ").strip() or "EMAIL"
-            password_key = ask("Password variable name [PASSWORD]: ").strip() or "PASSWORD"
+            path = Path(ask(f"{Q_ENV}: ").strip()).expanduser()
+            email_key = ask(f"{Q_EMAIL_KEY} [EMAIL]: ").strip() or "EMAIL"
+            password_key = ask(f"{Q_PASSWORD_KEY} [PASSWORD]: ").strip() or "PASSWORD"
             issue = check_credentials(path, email_key, password_key)
             if issue is None:
                 break
@@ -151,9 +166,64 @@ def _ask_profile(ask: Ask, say: Say, existing: dict) -> tuple[str, dict]:
         table.update(credentials_env=str(path), email_key=email_key, password_key=password_key)
         autologin = True
 
-    table["live_sync"] = _yes(ask, "Keep a background browser syncing new messages while Claude uses it?", True)
+    table["live_sync"] = _yes(ask, Q_LIVE, True)
     table["autologin"] = autologin
     return name, table
+
+
+class SetupError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class Answers:
+    """Answers for an unattended setup (``teams-reader setup --yes``); None = default."""
+
+    name: str | None = None
+    cache: str | None = None
+    proxy: str | None = None
+    credentials_env: str | None = None
+    email_key: str | None = None
+    password_key: str | None = None
+    live_sync: bool = True
+    make_default: bool = False
+    sign_in: bool = True
+    register: bool = True
+
+
+def _yn(flag: bool) -> str:
+    return "y" if flag else "n"
+
+
+def scripted(answers: Answers) -> Ask:
+    """An ``ask`` that answers from ``answers``; a rejected value raises instead of re-asking."""
+    table = [
+        (Q_NAME, "--name", answers.name or ""),
+        (Q_CACHE, "--cache", answers.cache or ""),
+        (Q_USE_PROXY, "--proxy", _yn(bool(answers.proxy))),
+        (Q_PROXY, "--proxy", answers.proxy or ""),
+        (Q_AUTOLOGIN, "--credentials-env", _yn(bool(answers.credentials_env))),
+        (Q_ENV, "--credentials-env", answers.credentials_env or ""),
+        (Q_EMAIL_KEY, "--email-key", answers.email_key or ""),
+        (Q_PASSWORD_KEY, "--password-key", answers.password_key or ""),
+        (Q_LIVE, "--no-live-sync", _yn(answers.live_sync)),
+        (Q_DEFAULT, "--make-default", _yn(answers.make_default)),
+        (Q_SIGN_IN, "--no-sign-in", _yn(answers.sign_in)),
+        (Q_REGISTER, "--no-register", _yn(answers.register)),
+        (Q_REPLACE, "", "y"),
+    ]
+    asked: set[str] = set()
+
+    def ask(prompt: str) -> str:
+        for question, flag, answer in table:
+            if prompt.startswith(question):
+                if question in asked and question not in (Q_REPLACE,):
+                    raise SetupError(f"{flag} was not accepted (see the message above)")
+                asked.add(question)
+                return answer
+        raise SetupError(f"unexpected question in unattended setup: {prompt!r}")
+
+    return ask
 
 
 @dataclass(frozen=True)
@@ -180,7 +250,7 @@ def _finish(ask: Ask, say: Say, steps: SetupSteps, name: str, table: dict, cmd: 
 
     say("\nSyncing from Teams web gives real chat names, full history, images and links,")
     say("and lets Claude see new messages within ~30s. It opens a browser window to sign in.")
-    if _yes(ask, "Sign in to Teams web now and download your chat history? (recommended)", True):
+    if _yes(ask, Q_SIGN_IN, True):
         say("A browser window opens; sign in if asked (approve MFA on your phone).")
         say("It goes blank while history downloads and closes by itself.")
         results.append(("Teams web", steps.connect(name)))
@@ -189,7 +259,7 @@ def _finish(ask: Ask, say: Say, steps: SetupSteps, name: str, table: dict, cmd: 
 
     if not steps.claude_available():
         results.append(("Claude Code", StepResult(False, f"CLI not found; later run: {' '.join(cmd)}")))
-    elif _yes(ask, "Register it with Claude Code now?", True):
+    elif _yes(ask, Q_REGISTER, True):
         results.append(("Claude Code", steps.register(cmd)))
     else:
         results.append(("Claude Code", StepResult(False, f"skipped; later run: {' '.join(cmd)}")))
@@ -215,7 +285,7 @@ def run(
 
     current_default = existing.get("default_profile")
     make_default = not current_default or current_default == name or _yes(
-        ask, f"Make {name!r} the default profile (currently {current_default!r})?", False
+        ask, f"{Q_DEFAULT}{name!r} the default profile (currently {current_default!r})?", False
     )
     if path.is_file():
         shutil.copy2(path, path.with_name(path.name + ".bak"))

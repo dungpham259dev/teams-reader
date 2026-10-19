@@ -30,6 +30,32 @@ It ends with a ✓/✗ summary. A skipped or failed step prints the command that
 finishes it later. Re-run `teams-reader setup` any time to add or change a
 profile.
 
+### Install with Claude Code
+
+You can also ask Claude Code: "Install teams-reader from
+https://github.com/dungpham259dev/teams-reader, follow its README". Claude's
+shell has no terminal for the questions, so it runs setup unattended:
+
+1. Ask the user, in one message: a profile name (default `default`); is
+   Teams reachable only through a VPN proxy, and its URL; optionally, a
+   `.env` file and the variable names holding the Teams email and password,
+   for automatic re-login (never read or print the values).
+2. Run, with a 10-minute timeout, adding only the options the user gave:
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/dungpham259dev/teams-reader/main/install.sh | bash -s -- \
+     --yes --name NAME --proxy socks5://127.0.0.1:1080 \
+     --credentials-env ~/path/.env --email-key EMAIL --password-key PASSWORD
+   ```
+
+   Tell the user first that a browser window will open to sign in to Teams
+   (approve MFA on the phone), then downloads the chat history and closes.
+3. Relay the setup summary, then ask the user to run `/mcp` (or restart
+   Claude Code) so the new server loads.
+
+`teams-reader setup --help` lists every option (`--cache`, `--no-sign-in`,
+`--no-live-sync`, `--make-default`, ...).
+
 <details>
 <summary>Manual install</summary>
 

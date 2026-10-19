@@ -16,12 +16,14 @@ from typing import Any, Callable
 from teams_reader import logs
 from teams_reader.browser.backfill import sync_with
 from teams_reader.browser.live import LiveBrowser, PlaywrightSession, should_sync
+from teams_reader.mcp import freshness
 from teams_reader.store import db as db_mod
 
 DEFAULT_INTERVAL = 30.0
 DEFAULT_IDLE_AFTER = 900.0
 _BACKOFF_CAP = 600.0
 _BACKGROUND_MAX_PAGES = 20
+_MIN_GAP = 3.0  # between syncs triggered by questions
 _log = logs.get("sync")
 
 
@@ -45,7 +47,7 @@ class LiveSync:
         ),
         interval: float = DEFAULT_INTERVAL,
         idle_after: float = DEFAULT_IDLE_AFTER,
-        tick: float = 5.0,
+        tick: float = 1.0,
     ) -> None:
         self._db_file = db_file
         self._factory = browser_factory
@@ -61,6 +63,7 @@ class LiveSync:
         self._last_sync: float | None = None
         self._last_error: str | None = None
         self._failures = 0
+        self._synced_wall: float | None = None
 
     def touch(self) -> None:
         """Note a tool call; starts the background poller on first use."""
@@ -116,21 +119,52 @@ class LiveSync:
         return self._conn
 
     def _poll(self) -> None:
-        while not self._stop.wait(self._tick):
-            now = time.monotonic()
-            interval = backoff(self._interval, self._failures) if self._failures else self._interval
-            if not should_sync(now, self._last_use, self._last_sync, interval, self._idle_after):
-                continue
-            try:
-                summary = self.sync(interactive=False, max_pages=_BACKGROUND_MAX_PAGES)
-                _log.info("background sync: %s chats changed, %s new messages (%.1fs)",
-                          getattr(summary, "chats_synced", "?"), getattr(summary, "new_messages", "?"),
-                          time.monotonic() - now)
-                self._last_error = None
-                self._failures = 0
-            except Exception as exc:  # noqa: BLE001 - reported via status(), retried later
-                self._last_error = str(exc)[:300]
-                self._failures += 1
-                _log.warning("background sync failed (%d in a row; next try in %ds): %s", self._failures,
-                             backoff(self._interval, self._failures), self._last_error)
-            self._last_sync = time.monotonic()
+        conn = db_mod.connect(self._db_file)  # this thread's own connection
+        try:
+            while not self._stop.wait(self._tick):
+                self._poll_once(conn)
+        finally:
+            conn.close()
+
+    def _due(self, conn: sqlite3.Connection, now: float) -> bool:
+        """Sync on the interval while any session uses the tools, and at once
+        after a question newer than the last sync (from any session)."""
+        shared = freshness.used_at(conn)
+        last_use = self._last_use
+        if shared is not None:
+            shared_mono = now - (time.time() - shared)
+            last_use = shared_mono if last_use is None else max(last_use, shared_mono)
+        if self._failures:
+            interval = backoff(self._interval, self._failures)
+            return should_sync(now, last_use, self._last_sync, interval, self._idle_after)
+        asked = shared is not None and (self._synced_wall is None or shared > self._synced_wall)
+        gap_ok = self._last_sync is None or now - self._last_sync >= _MIN_GAP
+        return should_sync(now, last_use, self._last_sync, self._interval, self._idle_after) or (asked and gap_ok)
+
+    def _poll_once(self, conn: sqlite3.Connection) -> None:
+        from teams_reader.browser.profile_lock import ProfileInUse
+
+        now = time.monotonic()
+        if not self._due(conn, now):
+            return
+        started_wall = time.time()
+        try:
+            summary = self.sync(interactive=False, max_pages=_BACKGROUND_MAX_PAGES)
+            _log.info("background sync: %s chats changed, %s new messages (%.1fs)",
+                      getattr(summary, "chats_synced", "?"), getattr(summary, "new_messages", "?"),
+                      time.monotonic() - now)
+            self._last_error = None
+            self._failures = 0
+            self._synced_wall = started_wall
+            freshness.mark_synced(conn, started_wall)
+        except ProfileInUse as exc:
+            self._last_error = str(exc)[:300]
+            self._failures += 1
+            _log.info("another session holds the browser and syncs for everyone (%s)", self._last_error[:80])
+        except Exception as exc:  # noqa: BLE001 - reported via status(), retried later
+            self._last_error = str(exc)[:300]
+            self._failures += 1
+            freshness.mark_failed(conn, self._last_error)
+            _log.warning("background sync failed (%d in a row; next try in %ds): %s", self._failures,
+                         backoff(self._interval, self._failures), self._last_error)
+        self._last_sync = time.monotonic()

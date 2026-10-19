@@ -159,3 +159,40 @@ def test_failed_sign_in_is_reported_not_fatal(tmp_path, monkeypatch):
                      steps=_steps(calls, connect_ok=False))
     assert "✗ Teams web: VPN down" in "\n".join(out)
     assert ("register", "teams-reader") in calls
+
+
+@pytest.mark.unit
+def test_unattended_setup_takes_every_answer_from_options(tmp_path, monkeypatch):
+    monkeypatch.setattr(setup_wizard, "available_caches", lambda: ["work"])
+    monkeypatch.setattr(setup_wizard, "port_open", lambda host, port: True)
+    env = tmp_path / "creds.env"
+    env.write_text("JIRA_EMAIL=a@b.c\nPASSWORD=p\n")
+    answers = setup_wizard.Answers(
+        name="acme", proxy="socks5://127.0.0.1:1080", credentials_env=str(env), email_key="JIRA_EMAIL",
+        sign_in=False,
+    )
+    calls, out = [], []
+    setup_wizard.run(ask=setup_wizard.scripted(answers), say=out.append, config_path=tmp_path / "c.toml",
+                     steps=_steps(calls))
+    data = tomllib.loads((tmp_path / "c.toml").read_text())
+    assert data["profiles"]["acme"]["proxy"] == "socks5://127.0.0.1:1080"
+    assert data["profiles"]["acme"]["email_key"] == "JIRA_EMAIL" and data["profiles"]["acme"]["autologin"]
+    assert calls == [("cache", "acme"), ("register", "teams-reader")]
+
+
+@pytest.mark.unit
+def test_unattended_setup_fails_loudly_on_a_bad_option(tmp_path, monkeypatch):
+    monkeypatch.setattr(setup_wizard, "available_caches", lambda: ["work"])
+    ask = setup_wizard.scripted(setup_wizard.Answers(cache="nonsense"))
+    with pytest.raises(setup_wizard.SetupError, match="--cache"):
+        setup_wizard.run(ask=ask, say=lambda s: None, config_path=tmp_path / "c.toml")
+    assert not (tmp_path / "c.toml").exists()
+
+
+@pytest.mark.unit
+def test_unattended_setup_keeps_defaults_when_options_are_omitted(tmp_path, monkeypatch):
+    monkeypatch.setattr(setup_wizard, "available_caches", lambda: ["personal"])
+    profile = setup_wizard.run(ask=setup_wizard.scripted(setup_wizard.Answers()), say=lambda s: None,
+                               config_path=tmp_path / "c.toml")
+    assert profile.name == "default" and profile.cache == "personal" and profile.proxy is None
+    assert profile.live_sync and not profile.autologin

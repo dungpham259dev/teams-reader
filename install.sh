@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # One-command installer for teams-reader (macOS).
 #   curl -fsSL https://raw.githubusercontent.com/dungpham259dev/teams-reader/main/install.sh | bash
+# Unattended (e.g. run by Claude Code), arguments go to `teams-reader setup`:
+#   curl -fsSL .../install.sh | bash -s -- --yes --cache work --proxy socks5://127.0.0.1:1080
 # Installs dependencies and the CLI, downloads its browser, then runs the
 # interactive `teams-reader setup` (config, cache read, Teams sign-in + first sync,
 # Claude Code registration).
@@ -54,10 +56,14 @@ if [ "${TEAMS_READER_SKIP_SETUP:-0}" = "1" ]; then
 fi
 
 say "Setup"
-if [ -t 0 ]; then
+if [ "$#" -gt 0 ]; then
+  teams-reader setup "$@"
+elif [ -t 0 ]; then
   teams-reader setup
-elif [ -r /dev/tty ]; then
+elif (exec </dev/tty) 2>/dev/null; then
   teams-reader setup </dev/tty  # piped from curl: answer from the terminal
 else
-  say "No terminal available. Run 'teams-reader setup' to configure."
+  # No terminal (e.g. an agent's shell): -r /dev/tty passes there but opening it fails.
+  say "No terminal to ask questions in. Finish with 'teams-reader setup' in a terminal,"
+  say "or unattended: 'teams-reader setup --yes [--cache work] [--proxy URL] ...' (see --help)."
 fi

@@ -259,3 +259,28 @@ def test_commands_write_the_activity_log(two_profiles, capsys):
 def test_logs_without_a_log_explains(two_profiles, capsys):
     assert cli.main(["logs"]) == 1
     assert "No log yet" in capsys.readouterr().err
+
+
+@pytest.mark.unit
+def test_setup_yes_runs_without_questions(tmp_path, monkeypatch, capsys):
+    from teams_reader import setup_steps, setup_wizard
+
+    cfg = tmp_path / "config.toml"
+    monkeypatch.setenv("TEAMS_READER_CONFIG", str(cfg))
+    monkeypatch.setattr(setup_wizard, "available_caches", lambda: ["work"])
+    monkeypatch.setattr(setup_steps, "read_cache", lambda name: setup_wizard.StepResult(True, "ok"))
+    monkeypatch.setattr("builtins.input", lambda prompt: pytest.fail(f"asked: {prompt}"))
+    rc = cli.main(["setup", "--yes", "--name", "acme", "--cache", "none", "--no-sign-in", "--no-register"])
+    assert rc == 0
+    assert "[profiles.acme]" in cfg.read_text()
+    assert "skipped; run `teams-reader --profile acme login`" in capsys.readouterr().out
+
+
+@pytest.mark.unit
+def test_setup_yes_with_a_bad_option_exits_2(tmp_path, monkeypatch, capsys):
+    from teams_reader import setup_wizard
+
+    monkeypatch.setenv("TEAMS_READER_CONFIG", str(tmp_path / "config.toml"))
+    monkeypatch.setattr(setup_wizard, "available_caches", lambda: ["work"])
+    assert cli.main(["setup", "--yes", "--proxy", "not-a-url", "--no-sign-in", "--no-register"]) == 2
+    assert "--proxy was not accepted" in capsys.readouterr().err

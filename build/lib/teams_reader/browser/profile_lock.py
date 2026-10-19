@@ -29,6 +29,21 @@ class ProfileLock:
             self._fd = None
 
 
+def is_held(directory: Path) -> bool:
+    """Whether some process (this one included) holds the profile's browser."""
+    path = directory / _LOCK_NAME
+    if not path.is_file():
+        return False
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(fd)  # closing drops a lock we just took
+    return False
+
+
 def acquire(directory: Path, profile_name: str) -> ProfileLock:
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / _LOCK_NAME

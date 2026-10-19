@@ -172,7 +172,9 @@ def _register_mcp(cmd: list[str], ask=input, exists=_mcp_exists):
 
     name = cmd[cmd.index("--") - 1]
     if exists(name):
-        if not ask(f"Claude Code already has an MCP server {name!r}. Replace it? [y/N]: ").strip().lower().startswith("y"):
+        from teams_reader.setup_wizard import Q_REPLACE
+
+        if not ask(f"{Q_REPLACE} {name!r}. Replace it? [y/N]: ").strip().lower().startswith("y"):
             return StepResult(True, f"kept the existing {name!r}")
         subprocess.call(["claude", "mcp", "remove", "--scope", "user", name])
     code = subprocess.call(cmd)
@@ -185,17 +187,36 @@ def _installed_exe() -> str:
     return str(Path(found).resolve()) if found else str(Path(sys.argv[0]).resolve())
 
 
-def _cmd_setup(_: argparse.Namespace) -> int:
+def _setup_answers(args: argparse.Namespace):
+    from teams_reader.setup_wizard import Answers
+
+    return Answers(
+        name=args.name, cache=args.cache, proxy=args.proxy, credentials_env=args.credentials_env,
+        email_key=args.email_key, password_key=args.password_key, live_sync=not args.no_live_sync,
+        make_default=args.make_default, sign_in=not args.no_sign_in, register=not args.no_register,
+    )
+
+
+def _cmd_setup(args: argparse.Namespace) -> int:
     from teams_reader import setup_steps, setup_wizard
 
-    print("teams-reader setup: press Enter to accept the [default].\n")
+    if args.yes:
+        ask = setup_wizard.scripted(_setup_answers(args))
+        print("teams-reader setup (unattended)\n")
+    else:
+        ask = input
+        print("teams-reader setup: press Enter to accept the [default].\n")
     steps = setup_wizard.SetupSteps(
         read_cache=setup_steps.read_cache,
         connect=setup_steps.connect,
-        register=_register_mcp,
+        register=lambda cmd: _register_mcp(cmd, ask=ask),
         claude_available=lambda: shutil.which("claude") is not None,
     )
-    setup_wizard.run(ask=input, say=print, steps=steps, exe=_installed_exe())
+    try:
+        setup_wizard.run(ask=ask, say=print, steps=steps, exe=_installed_exe())
+    except setup_wizard.SetupError as exc:
+        print(f"teams-reader setup: {exc}", file=sys.stderr)
+        return 2
     print("\nDone. Restart Claude Code (or run /mcp) and ask it about your Teams chats.")
     return 0
 
@@ -242,7 +263,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--profile", default=None, help="config profile to use (default: config default_profile)")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("setup", help="interactive first-run setup (config + Claude Code)").set_defaults(func=_cmd_setup)
+    setup = sub.add_parser("setup", help="first-run setup: config, sign-in, first sync, Claude Code")
+    setup.add_argument("--yes", action="store_true", help="no questions: take the options below, defaults otherwise")
+    setup.add_argument("--name", help="profile name (default: default)")
+    setup.add_argument("--cache", help="work | personal | none | path (default: first found)")
+    setup.add_argument("--proxy", help="proxy URL for Teams, e.g. socks5://127.0.0.1:1080")
+    setup.add_argument("--credentials-env", help=".env file for automatic re-login")
+    setup.add_argument("--email-key", help="email variable in that file (default EMAIL)")
+    setup.add_argument("--password-key", help="password variable in that file (default PASSWORD)")
+    setup.add_argument("--no-live-sync", action="store_true", help="no background browser sync")
+    setup.add_argument("--make-default", action="store_true", help="make this the default profile")
+    setup.add_argument("--no-sign-in", action="store_true", help="skip the Teams web sign-in and first sync")
+    setup.add_argument("--no-register", action="store_true", help="don't register with Claude Code")
+    setup.set_defaults(func=_cmd_setup)
     sub.add_parser("config", help="show the active profile's settings").set_defaults(func=_cmd_config)
     sub.add_parser("profiles", help="list profiles (* = default)").set_defaults(func=_cmd_profiles, profile_free=True)
     use = sub.add_parser("use", help="make a profile the default")
