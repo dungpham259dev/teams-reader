@@ -336,3 +336,17 @@ def test_fresh_also_asks_the_live_sync_to_recover_a_lost_login(live, monkeypatch
     broker = server_mod.Broker(live)
     broker.handle({"op": "fresh", "since": 0.0})
     assert live.recovered == 1 and live.touches >= 1
+
+
+@pytest.mark.unit
+def test_a_timed_out_fresh_sync_names_its_own_limit(live, monkeypatch):
+    from concurrent.futures import TimeoutError as FutureTimeout
+
+    def slow_run(job, timeout=None, interactive=True):
+        raise FutureTimeout()
+
+    monkeypatch.setattr(live, "run", slow_run)
+    reply = server_mod.Broker(live).handle({"op": "fresh", "since": 0.0})
+    assert reply["type"] == "TimeoutError"
+    assert f"{server_mod.FRESH_TIMEOUT_S:.0f}s" in reply["error"]
+    assert "still runs" in reply["error"]

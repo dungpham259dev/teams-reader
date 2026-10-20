@@ -87,8 +87,9 @@ class Broker:
             if op == "fresh":
                 return self._fresh(float(request.get("since") or 0.0))
         except FutureTimeout:
-            return {"error": f"the browser job did not finish within {JOB_TIMEOUT_S:.0f}s "
-                             "(a Teams sign-in may be in progress)", "type": "TimeoutError"}
+            limit = FRESH_TIMEOUT_S if op == "fresh" else JOB_TIMEOUT_S
+            return {"error": f"the browser job did not finish within {limit:.0f}s; it still runs in the "
+                             "background (a cold start, a long sync or a Teams sign-in)", "type": "TimeoutError"}
         except Exception as exc:  # noqa: BLE001 - delivered to the client
             return {"error": str(exc), "type": type(exc).__name__}
         return {"error": f"unknown op: {op}"}

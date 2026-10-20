@@ -143,3 +143,11 @@ def test_parse_conversations_maps_topic_kind_and_activity():
     assert convs["19:a_b@unq.gbl.spaces"].last_activity_ms == 1792000000000
     assert convs["19:meeting_x@thread.v2"].kind == "meeting"
     assert chatsvc.parse_conversations({"error": 401}) == []
+
+
+@pytest.mark.unit
+def test_an_edit_or_delete_counts_as_activity():
+    conv = _conv("48:notes", ptype="StreamOfNotes", last="2026-10-20T11:29:05.115Z")
+    conv["lastUpdatedMessageVersion"] = 1792495798170  # a delete, 50s after the last message
+    [parsed] = chatsvc.parse_conversations({"conversations": [conv]})
+    assert parsed.last_activity_ms == 1792495798170

@@ -281,3 +281,25 @@ def test_a_clean_sync_reports_no_failures():
     fetch, _ = _server()
     summary = backfill.sync_with(conn, fetch, TPL)
     assert (summary.failed_chats, summary.last_error) == (0, None)
+
+
+@pytest.mark.unit
+def test_a_message_deleted_after_the_last_sync_is_hidden_on_the_next_one():
+    conn = db_mod.connect(":memory:")
+    fetch, _ = _server()
+    backfill.sync_with(conn, fetch, TPL)
+    assert db_mod.read_chat(conn, "19:a@thread.v2")[0]["deleted"] == 0
+
+    convs = {"conversations": [{
+        "id": "19:a@thread.v2",
+        "threadProperties": {"topic": "Sigma", "productThreadType": "Chat"},
+        "lastMessage": {"composetime": "2026-10-16T06:41:36Z"},  # unchanged: Teams does not bump it
+        "lastUpdatedMessageVersion": 1792495798170,
+    }]}
+    deleted = {"messages": [{
+        "id": "1", "content": "", "imdisplayname": "Ann", "originalarrivaltime": "2026-10-16T06:41:36Z",
+        "version": "1792495798170", "properties": {"deletetime": "1792495798170"},
+    }]}
+    summary = backfill.sync_with(conn, lambda url: convs if url.endswith("pageSize=500") else deleted, TPL)
+    assert summary.chats_synced == 1
+    assert conn.execute("SELECT deleted FROM messages WHERE msg_id = '1'").fetchone()[0] == 1

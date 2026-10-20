@@ -55,6 +55,8 @@ def _last_activity(conv: dict) -> int | None:
     last = conv.get("lastMessage") or {}
     stamps = [_to_ms(last.get(k)) for k in ("originalarrivaltime", "composetime")]
     stamps.append(_to_ms(conv.get("lastUpdatedMessageId")))
+    # An edit or delete leaves lastMessage alone; only these versions move.
+    stamps.append(_to_ms(conv.get("lastUpdatedMessageVersion")))
     known = [s for s in stamps if s is not None]
     return max(known) if known else None
 
