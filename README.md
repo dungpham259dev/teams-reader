@@ -63,7 +63,9 @@ teams-reader update
 ```
 
 It pulls the latest version and its browser, and keeps your config, chats and
-sign-in. Then run `/mcp` in each open Claude Code session (or restart it).
+sign-in. Then stop the running broker so the next request starts the new one
+(`pkill -f "teams_reader.cli.*broker"`), and run `/mcp` in each open Claude Code
+session (or restart it).
 Installs from before this command existed update once with:
 
 ```bash
@@ -104,8 +106,8 @@ Open Claude Code and ask, for example:
 | `chat_profile`, `suggest_reply` | participants' style, reply suggestions to copy (never sent) |
 | `list_images`, `read_image` | see a chat's images; the downloaded file is deleted after reading |
 | `list_links`, `read_link` | links shared in chats, and the page text behind them |
-| `list_transcripts`, `read_transcript` | transcripts of recorded or transcribed meetings, as speaker turns |
-| `sync_history` | pull new or full history from Teams web on demand |
+| `list_transcripts`, `read_transcript` | transcripts of recorded or transcribed meetings and calls, as speaker turns |
+| `sync_history` | pull new or full history from Teams web on demand; reports `failed_chats` and `last_error` when some chats could not be read |
 
 ## Profiles
 
@@ -177,7 +179,8 @@ as `forbidden` and retried after 10 minutes.
 (with `email_key`/`password_key`), an expired session is signed in again during
 actions you start. MFA still needs your phone, and the number shows as a macOS
 notification. A rejected password is never retried. Background sync never
-signs in; it reports `login required` instead.
+signs in by itself; when it hits a sign-in page, the next question that wants
+fresh data signs the broker in again (at most every 10 minutes).
 
 ## Activity log
 
@@ -202,6 +205,7 @@ teams-reader fetch-image --chat NAME --limit N
 teams-reader open-link URL      # sign in to a linked site once, for read_link
 teams-reader locate             # list the Teams caches found
 teams-reader mcp                # the MCP server (stdio)
+teams-reader broker             # the shared browser (MCP servers start it on demand)
 teams-reader wipe --yes         # delete the store and snapshots
 ```
 
@@ -210,7 +214,9 @@ teams-reader wipe --yes         # delete the store and snapshots
 - The store is a local copy of chat content that may belong to a client;
   decide per tenant whether that is acceptable. It lives under
   `~/Library/Application Support/teams-reader/`; `teams-reader wipe --yes`
-  deletes it.
+  deletes it. Stop the broker and the MCP servers first
+  (`pkill -f "teams_reader.cli.*broker"; pkill -f "teams-reader mcp"`), or they
+  keep writing to the deleted file.
 - No admin rights are needed. If reading the cache fails with "Operation not
   permitted", give your terminal Full Disk Access (System Settings → Privacy &
   Security) and restart it.
