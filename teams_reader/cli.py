@@ -1,4 +1,4 @@
-"""Command-line entry point: ingest | daemon | mcp | wipe | locate."""
+"""Command-line entry point: ingest | daemon | mcp | broker | wipe | locate."""
 from __future__ import annotations
 
 import argparse
@@ -122,6 +122,14 @@ def _cmd_fetch_image(args: argparse.Namespace) -> int:
         conn.close()
     print(f"images: {result['downloaded']}/{result['requested']} downloaded")
     return 0
+
+
+def _cmd_broker(args: argparse.Namespace) -> int:
+    from teams_reader.broker import client, server
+
+    profile = settings.active()
+    return server.serve(profile.data_dir, client.socket_path(profile.data_dir), profile.db_path,
+                        idle_after=args.idle_after)
 
 
 def _cmd_mcp(_: argparse.Namespace) -> int:
@@ -365,6 +373,9 @@ def build_parser() -> argparse.ArgumentParser:
     fetch_image.set_defaults(func=_cmd_fetch_image)
 
     sub.add_parser("mcp", help="run the MCP server (stdio)").set_defaults(func=_cmd_mcp)
+    broker = sub.add_parser("broker", help="run the shared browser broker (MCP servers start it on demand)")
+    broker.add_argument("--idle-after", type=float, default=1800.0, help="exit after this many idle seconds")
+    broker.set_defaults(func=_cmd_broker)
 
     wipe = sub.add_parser("wipe", help="delete the store and snapshots")
     wipe.add_argument("--yes", action="store_true", help="confirm deletion")

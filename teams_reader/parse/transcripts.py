@@ -1,7 +1,8 @@
 """Teams meeting transcripts: where a meeting chat points to them, and their text.
 
-When a recorded or transcribed meeting ends, Teams posts a
-``RichText/Media_CallRecording`` card in the meeting chat. Its ``<item
+When a recorded or transcribed meeting or call ends, Teams posts a
+``RichText/Media_CallRecording`` card in the chat it belongs to: the meeting
+chat for a scheduled meeting, the group or 1:1 chat for a call started there. Its ``<item
 type="amsTranscript">`` is a WebVTT file on the AMS service, readable with the
 same browser cookies as chat images. A long call posts one card per chunk, all
 pointing at the same transcript.
@@ -42,8 +43,8 @@ class Cue:
     text: str
 
 
-def is_meeting_chat(chat_id: str | None) -> bool:
-    return (chat_id or "").startswith("19:meeting_")
+def can_hold_recordings(chat_id: str | None) -> bool:
+    return (chat_id or "").startswith("19:")
 
 
 def _to_ms(stamp: str) -> int | None:

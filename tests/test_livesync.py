@@ -155,3 +155,38 @@ def test_a_real_failure_is_shared_so_other_sessions_do_not_wait(tmp_path, monkey
         assert "expired" in db_mod.get_state(conn, freshness.ERROR_KEY)
     finally:
         live.close()
+
+
+@pytest.mark.unit
+def test_lost_login_is_recovered_once_a_fresh_question_arrives(tmp_path, monkeypatch):
+    from teams_reader.browser.live import LoginRequired
+
+    calls = []
+
+    def sync(conn, fetch, tpl, **kw):
+        calls.append(kw)
+        if len(calls) == 1:
+            raise LoginRequired("sign-in page")
+
+    monkeypatch.setattr(livesync, "sync_with", sync)
+    browser = _FakeBrowser()
+    interactive = []
+    real_run = browser.run
+
+    def run(job, timeout=None, interactive_flag=False, **kw):
+        interactive.append(kw.get("interactive", interactive_flag))
+        return real_run(job)
+
+    browser.run = run
+    live = livesync.LiveSync(tmp_path / "s.db", browser_factory=lambda: browser, tick=0.01, interval=1000)
+    try:
+        live.recover_login()  # nothing lost yet
+        live.touch()
+        assert _wait_for(lambda: live.status()["last_error"] == "sign-in page")
+        live.recover_login()
+        assert _wait_for(lambda: live.status()["last_error"] is None)
+        live.recover_login()  # recovered: no further sign-in
+        time.sleep(0.05)
+        assert interactive == [False, True]
+    finally:
+        live.close()

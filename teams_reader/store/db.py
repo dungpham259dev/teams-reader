@@ -396,9 +396,13 @@ def add_transcript_ref(conn: sqlite3.Connection, chat_id: str, ref: TranscriptRe
     return cur.rowcount > 0
 
 
-def pending_transcripts(conn: sqlite3.Connection, limit: int = 20) -> list[str]:
+def pending_transcripts(conn: sqlite3.Connection, limit: int = 20, forbidden_before: int | None = None) -> list[str]:
+    """Transcripts to fetch: never fetched, or refused at or before ``forbidden_before`` (ms)."""
     rows = conn.execute(
-        "SELECT url FROM transcripts WHERE status = 'pending' ORDER BY started_ts DESC LIMIT ?", (limit,)
+        "SELECT url FROM transcripts WHERE status = 'pending' "
+        "OR (status = 'forbidden' AND ? IS NOT NULL AND fetched_at <= ?) "
+        "ORDER BY started_ts DESC LIMIT ?",
+        (forbidden_before, forbidden_before, limit),
     ).fetchall()
     return [r["url"] for r in rows]
 

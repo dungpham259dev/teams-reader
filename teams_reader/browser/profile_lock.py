@@ -55,7 +55,7 @@ def acquire(directory: Path, profile_name: str) -> ProfileLock:
         os.close(fd)
         raise ProfileInUse(
             f"browser profile {profile_name!r} is in use by another teams-reader process "
-            f"(pid {owner}), e.g. the MCP server's warm browser; stop it or use another profile"
+            f"(pid {owner}), usually the shared broker, which exits after 30 idle minutes; stop it or use another profile"
         ) from None
     os.ftruncate(fd, 0)
     os.write(fd, str(os.getpid()).encode())

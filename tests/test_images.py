@@ -123,3 +123,46 @@ def test_images_for_msg_and_clear_image_path(conn):
 
     db.clear_image_path(conn, "m1", urls[0])
     assert set(db.pending_images(conn)) == {("m1", urls[0]), ("m1", urls[1])}
+
+
+class _Resp:
+    def __init__(self, status, body=b""):
+        self.status, self._body = status, body
+
+    def body(self):
+        return self._body
+
+
+class _Ctx:
+    def __init__(self, plain, with_headers):
+        self.plain, self.with_headers, self.calls = plain, with_headers, []
+        self.request = self
+
+    def get(self, url, timeout=None, headers=None):
+        self.calls.append(bool(headers))
+        return self.with_headers if headers else self.plain
+
+
+def _one_pending_image(conn):
+    msg = Message("m1", "19:c@thread.v2", "Alice", 1, "pic", None, image_urls=("https://h/v1/objects/A/views/imgo",))
+    db.upsert_messages(conn, [msg])
+
+
+@pytest.mark.unit
+def test_download_retries_a_refused_image_with_the_session_headers(conn, tmp_path, monkeypatch):
+    monkeypatch.setattr(images, "local_path_for", lambda url: tmp_path / "a.jpg")
+    monkeypatch.setattr(images.settings, "active", lambda: type("P", (), {"images_dir": tmp_path})())
+    _one_pending_image(conn)
+    ctx = _Ctx(_Resp(401), _Resp(200, b"jpg"))
+    assert images.download_with(conn, ctx, headers={"authorization": "Bearer t"}) == {"requested": 1, "downloaded": 1}
+    assert ctx.calls == [False, True]
+
+
+@pytest.mark.unit
+def test_download_still_reports_expired_auth_when_headers_do_not_help(conn, tmp_path, monkeypatch):
+    from teams_reader.browser.live import AuthExpired
+
+    monkeypatch.setattr(images.settings, "active", lambda: type("P", (), {"images_dir": tmp_path})())
+    _one_pending_image(conn)
+    with pytest.raises(AuthExpired):
+        images.download_with(conn, _Ctx(_Resp(401), _Resp(403)), headers={"authorization": "Bearer t"})

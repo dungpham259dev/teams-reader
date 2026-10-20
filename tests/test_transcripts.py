@@ -76,9 +76,12 @@ def test_render_merges_consecutive_turns_of_one_speaker():
 
 
 @pytest.mark.unit
-def test_meeting_chat_ids_are_recognised():
-    assert transcripts.is_meeting_chat(_CHAT)
-    assert not transcripts.is_meeting_chat("19:abc_def@unq.gbl.spaces")
+def test_any_thread_chat_can_hold_call_recordings():
+    assert transcripts.can_hold_recordings(_CHAT)
+    assert transcripts.can_hold_recordings("19:a5e2d1@thread.v2")
+    assert transcripts.can_hold_recordings("19:abc_def@unq.gbl.spaces")
+    assert not transcripts.can_hold_recordings("48:notes")
+    assert not transcripts.can_hold_recordings(None)
 
 
 class _Resp:
@@ -90,17 +93,18 @@ class _Resp:
 
 
 class _Request:
-    def __init__(self, responses):
+    def __init__(self, responses, with_headers=None):
         self.responses, self.calls = responses, []
+        self.with_headers = with_headers or {}
 
-    def get(self, url, timeout=None):
-        self.calls.append(url)
-        return self.responses[url]
+    def get(self, url, timeout=None, headers=None):
+        self.calls.append((url, bool(headers)))
+        return self.with_headers[url] if headers else self.responses[url]
 
 
 class _Context:
-    def __init__(self, responses):
-        self.request = _Request(responses)
+    def __init__(self, responses, with_headers=None):
+        self.request = _Request(responses, with_headers)
 
 
 def _page(messages, backward=None):
@@ -132,25 +136,69 @@ def test_discover_pages_meeting_chats_and_stores_new_refs(conn):
 
 
 @pytest.mark.unit
+def test_discover_finds_recordings_of_calls_started_in_a_group_chat(conn):
+    group = "19:group1@thread.v2"
+    db.set_chat_name(conn, group, "Backend Team", kind="group")
+    db.set_chat_name(conn, "48:notes", "Notes", kind="notes")
+    template = "https://t/api/chatsvc/emea/v1/users/ME/conversations/19%3Aother/messages?pageSize=200"
+    scanned = []
+
+    def fetch(url):
+        scanned.append(url)
+        return _page([_recording()] if "group1" in url else [])
+
+    assert fetch_mod.discover_with(conn, fetch, template) == 1
+    assert [r["chat_id"] for r in db.list_transcripts(conn)] == [group]
+    assert not any("notes" in url for url in scanned)
+
+
+@pytest.mark.unit
 def test_download_stores_rendered_text_and_marks_missing(conn):
     gone = _AMS.replace("abc", "old")
     db.add_transcript_ref(conn, _CHAT, transcripts.extract_refs([_recording()])[0])
     db.add_transcript_ref(conn, _CHAT, transcripts.extract_refs([_recording(ams=gone, call_id="c2")])[0])
     context = _Context({_AMS: _Resp(200, _VTT.encode()), gone: _Resp(404)})
-    assert fetch_mod.download_with(conn, context) == {"requested": 2, "downloaded": 1, "unavailable": 1}
+    assert fetch_mod.download_with(conn, context) == {
+        "requested": 2, "downloaded": 1, "unavailable": 1, "forbidden": 0,
+    }
     rows = {r["url"]: r for r in db.list_transcripts(conn)}
     assert rows[_AMS]["status"] == "ok"
     assert rows[gone]["status"] == "unavailable"
-    assert fetch_mod.download_with(conn, context) == {"requested": 0, "downloaded": 0, "unavailable": 0}
+    assert fetch_mod.download_with(conn, context) == {
+        "requested": 0, "downloaded": 0, "unavailable": 0, "forbidden": 0,
+    }
 
 
 @pytest.mark.unit
-def test_download_raises_auth_expired_on_401(conn):
-    from teams_reader.browser.live import AuthExpired
-
+def test_download_marks_a_refused_transcript_forbidden_and_keeps_going(conn):
+    second = _AMS.replace("abc", "def")
     db.add_transcript_ref(conn, _CHAT, transcripts.extract_refs([_recording()])[0])
-    with pytest.raises(AuthExpired):
-        fetch_mod.download_with(conn, _Context({_AMS: _Resp(401)}))
+    db.add_transcript_ref(conn, _CHAT, transcripts.extract_refs([_recording(ams=second, call_id="c2")])[0])
+    context = _Context({_AMS: _Resp(401), second: _Resp(200, _VTT.encode())})
+    assert fetch_mod.download_with(conn, context) == {
+        "requested": 2, "downloaded": 1, "unavailable": 0, "forbidden": 1,
+    }
+    rows = {r["url"]: r["status"] for r in db.list_transcripts(conn)}
+    assert rows == {_AMS: "forbidden", second: "ok"}
+
+
+@pytest.mark.unit
+def test_download_retries_a_refused_transcript_with_the_session_headers(conn):
+    db.add_transcript_ref(conn, _CHAT, transcripts.extract_refs([_recording()])[0])
+    context = _Context({_AMS: _Resp(401)}, with_headers={_AMS: _Resp(200, _VTT.encode())})
+    result = fetch_mod.download_with(conn, context, headers={"authorization": "Bearer t"})
+    assert result["downloaded"] == 1
+    assert context.request.calls == [(_AMS, False), (_AMS, True)]
+
+
+@pytest.mark.unit
+def test_forbidden_transcript_is_retried_only_after_the_retry_interval(conn):
+    db.add_transcript_ref(conn, _CHAT, transcripts.extract_refs([_recording()])[0])
+    fetch_mod.download_with(conn, _Context({_AMS: _Resp(403)}))
+    context = _Context({_AMS: _Resp(200, _VTT.encode())})
+    assert fetch_mod.download_with(conn, context)["requested"] == 0
+    later = fetch_mod._now_ms() + fetch_mod._FORBIDDEN_RETRY_MS + 1
+    assert fetch_mod.download_with(conn, context, now_ms=later)["downloaded"] == 1
 
 
 @pytest.mark.unit
@@ -179,7 +227,9 @@ def test_sync_with_discovers_then_downloads(conn):
         def fetch(self, url):
             return _page([_recording()])
 
-    assert fetch_mod.sync_with(conn, _Session()) == {"new": 1, "requested": 1, "downloaded": 1, "unavailable": 0}
+    assert fetch_mod.sync_with(conn, _Session()) == {
+        "new": 1, "requested": 1, "downloaded": 1, "unavailable": 0, "forbidden": 0,
+    }
 
 
 @pytest.mark.unit
@@ -240,3 +290,34 @@ def test_read_transcript_clamps_negative_max_chars(conn):
     fetch_mod.download_with(conn, _Context({_AMS: _Resp(200, _VTT.encode())}))
     tid = tools.list_transcripts(conn)[0]["transcript_id"]
     assert tools.read_transcript(conn, tid, max_chars=-5)["text"] == ""
+
+
+@pytest.mark.unit
+def test_rescan_skips_chats_with_no_activity_since_the_last_scan(conn):
+    template = "https://t/api/chatsvc/emea/v1/users/ME/conversations/19%3Aother/messages?pageSize=200"
+    calls = []
+
+    def fetch(url):
+        calls.append(url)
+        return _page([])
+
+    fetch_mod.discover_with(conn, fetch, template)
+    first_scan = int(db.get_state(conn, fetch_mod._SCANNED_PREFIX + _CHAT))
+    assert len(calls) == 1
+
+    db.set_chat_watermark(conn, _CHAT, first_scan - fetch_mod._RESCAN_MARGIN_MS - 1)
+    fetch_mod.discover_with(conn, fetch, template)
+    assert len(calls) == 1  # quiet since the last scan
+
+    db.set_chat_watermark(conn, _CHAT, first_scan + 1)
+    fetch_mod.discover_with(conn, fetch, template)
+    assert len(calls) == 2  # a new card (or message) arrived
+
+
+@pytest.mark.unit
+def test_rescan_still_happens_when_the_chat_has_no_watermark(conn):
+    template = "https://t/api/chatsvc/emea/v1/users/ME/conversations/19%3Aother/messages?pageSize=200"
+    calls = []
+    fetch_mod.discover_with(conn, lambda url: calls.append(url) or _page([]), template)
+    fetch_mod.discover_with(conn, lambda url: calls.append(url) or _page([]), template)
+    assert len(calls) == 2

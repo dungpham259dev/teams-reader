@@ -24,6 +24,7 @@ DEFAULT_IDLE_AFTER = 900.0
 _BACKOFF_CAP = 600.0
 _BACKGROUND_MAX_PAGES = 20
 _MIN_GAP = 3.0  # between syncs triggered by questions
+_LOGIN_RETRY_S = 600.0
 ACTIVE_S = 120.0  # after the last question, keep the short interval this long
 QUIET_FACTOR = 4
 IN_USE_TICK_FACTOR = 5
@@ -78,6 +79,8 @@ class LiveSync:
         self._failures = 0
         self._synced_wall: float | None = None
         self._in_use_elsewhere = False
+        self._login_lost = False
+        self._login_tried: float | None = None
 
     def touch(self) -> None:
         """Note a tool call; starts the background poller on first use."""
@@ -107,6 +110,30 @@ class LiveSync:
         return self.run(
             lambda s, conn: sync_with(conn, s.fetch, s.template_url, **kwargs), interactive=interactive
         )
+
+    def recover_login(self) -> None:
+        """Sign in again in the background once a user asks for fresh data, if the
+        background sync stopped at a sign-in page (it never signs in itself)."""
+        now = time.monotonic()
+        with self._guard:
+            if not self._login_lost:
+                return
+            if self._login_tried is not None and now - self._login_tried < _LOGIN_RETRY_S:
+                return
+            self._login_tried = now
+        threading.Thread(target=self._relogin, name="teams-relogin", daemon=True).start()
+
+    def _relogin(self) -> None:
+        try:
+            self.sync(interactive=True, max_pages=_BACKGROUND_MAX_PAGES)
+        except Exception as exc:  # noqa: BLE001 - reported via status(), retried after _LOGIN_RETRY_S
+            self._last_error = str(exc)[:300]
+            _log.warning("signing in again failed: %s", self._last_error)
+            return
+        _log.info("signed in again; background sync resumes")
+        self._login_lost = False
+        self._failures = 0
+        self._last_error = None
 
     def status(self) -> dict[str, Any]:
         age = None if self._last_sync is None else round(time.monotonic() - self._last_sync)
@@ -171,6 +198,7 @@ class LiveSync:
             self._last_error = None
             self._failures = 0
             self._in_use_elsewhere = False
+            self._login_lost = False
             self._synced_wall = started_wall
             freshness.mark_synced(conn, started_wall)
         except ProfileInUse as exc:
@@ -179,8 +207,11 @@ class LiveSync:
             self._in_use_elsewhere = True
             _log.info("another session holds the browser and syncs for everyone (%s)", self._last_error[:80])
         except Exception as exc:  # noqa: BLE001 - reported via status(), retried later
+            from teams_reader.browser.live import LoginRequired
+
             self._last_error = str(exc)[:300]
             self._failures += 1
+            self._login_lost = isinstance(exc, LoginRequired)
             freshness.mark_failed(conn, self._last_error)
             _log.warning("background sync failed (%d in a row; next try in %ds): %s", self._failures,
                          backoff(self._interval, self._failures), self._last_error)

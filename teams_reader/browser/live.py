@@ -195,6 +195,10 @@ class PlaywrightSession:
             self._pw.stop()
             raise
 
+    @property
+    def api_headers(self) -> dict[str, str]:
+        return dict(self._headers)
+
     def fetch(self, url: str) -> object:
         return checked(self._session_mod.fetch_api(self.context, url, self._headers))
 

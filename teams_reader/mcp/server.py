@@ -6,13 +6,13 @@ not, so it stays unit-testable on its own.
 """
 from __future__ import annotations
 
-import atexit
 import functools
 import threading
 import time
 from pathlib import Path
 
 from teams_reader import config, logs, refresh, settings
+from teams_reader.broker import client as broker_client
 from teams_reader.mcp import freshness, livesync, tools
 from teams_reader.store import db as db_mod
 
@@ -68,6 +68,14 @@ def _recent_transcript_sync(conn) -> int | None:
     return round(age) if age < _TRANSCRIPT_SYNC_WINDOW_S else None
 
 
+def _broker_live(profile: settings.Profile) -> broker_client.LiveProxy:
+    client = broker_client.BrokerClient(
+        broker_client.socket_path(profile.data_dir),
+        spawn=lambda: broker_client.spawn_broker(profile.name),
+    )
+    return broker_client.LiveProxy(client)
+
+
 def build_server(db_path: Path | None = None):
     config.ensure_app_dirs()
     db_file = db_path or config.db_path()
@@ -101,10 +109,8 @@ def build_server(db_path: Path | None = None):
 
     # Tool calls run on worker threads and share one sqlite connection.
     lock = threading.Lock()
-    # One warm browser serves background sync, images and links (None = one-shot).
-    live = livesync.LiveSync(db_file) if livesync.enabled() else None
-    if live is not None:
-        atexit.register(live.close)
+    # The shared broker's browser serves background sync, images and links (None = one-shot).
+    live = _broker_live(profile) if livesync.enabled() else None
 
     def _await_fresh() -> None:
         """Let the browser holder (any session) sync before answering."""
@@ -115,7 +121,11 @@ def build_server(db_path: Path | None = None):
             freshness.mark_used(conn, asked)
         if live is None:
             return
-        live.touch()
+        try:
+            live.touch(fresh=True)
+        except Exception as exc:  # noqa: BLE001 - answer from the store; freshness reports the gap
+            log.warning("could not reach the browser broker: %s", exc)
+            return
         waiter = db_mod.connect(db_file)  # sleeps without holding the shared connection
         try:
             outcome = freshness.wait_fresh(waiter, asked, syncing=profile_lock.is_held(profile.data_dir))
@@ -207,7 +217,7 @@ def build_server(db_path: Path | None = None):
         def fetch_page(link: str) -> dict:
             if live is None:
                 return links_mod.fetch_page(link)
-            return live.run(lambda s, _c: links_mod.fetch_page_with(s.context, link))
+            return live.job("read_link", url=link)
 
         return tools.read_link(url, fetch_page, is_shared, max_chars=max_chars)
 
@@ -224,7 +234,7 @@ def build_server(db_path: Path | None = None):
             lock.release()
             try:
                 if live is not None:
-                    return live.run(lambda s, c: images_mod.download_with(c, s.context, msg_ids=[mid]))
+                    return live.job("images", msg_ids=[mid])
                 own = db_mod.connect(db_file)
                 try:
                     return images_mod.download_images(own, msg_ids=[mid], headless=True)
@@ -243,8 +253,8 @@ def build_server(db_path: Path | None = None):
     @server.tool()
     def list_transcripts(chat: str | None = None, refresh: bool = True) -> dict:
         """Meeting transcripts (newest first) from recorded or transcribed Teams
-        meetings: title, start, duration, speakers. With `refresh`, first looks
-        for new ones in meeting chats and downloads them (seconds on a warm
+        meetings and group/1:1 calls: title, start, duration, speakers. With
+        `refresh`, first looks for new ones in all chats and downloads them (seconds on a warm
         browser). read_transcript returns the text."""
         from teams_reader.browser import transcripts as transcripts_mod
 
@@ -262,8 +272,7 @@ def build_server(db_path: Path | None = None):
         elif refresh:
             try:
                 if live is not None:
-                    live.touch()
-                    synced = live.run(lambda s, c: transcripts_mod.sync_with(c, s, chat_id))
+                    synced = live.job("transcripts", chat_id=chat_id)
                 else:
                     own = db_mod.connect(db_file)
                     try:

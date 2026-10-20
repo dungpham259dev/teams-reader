@@ -31,6 +31,7 @@ def download_with(
     chat: str | None = None,
     msg_ids: list[str] | None = None,
     limit: int = 50,
+    headers: dict[str, str] | None = None,
 ) -> dict[str, int]:
     """Fetch pending image bytes through an open, logged-in browser context."""
     from teams_reader.store import db as db_mod
@@ -42,6 +43,9 @@ def download_with(
         dest = local_path_for(url)
         try:
             resp = context.request.get(url, timeout=60_000)
+            # Some objects (e.g. from group-chat calls) want the session's auth header, not just cookies.
+            if resp.status in (401, 403) and headers:
+                resp = context.request.get(url, timeout=60_000, headers=headers)
         except Exception:  # noqa: BLE001 - one bad image must not abort the batch
             continue
         if resp.status in (401, 403):

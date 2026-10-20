@@ -148,23 +148,30 @@ real chat names. It blocks every request that would mark messages read or
 report presence, and parks on a blank page instead of opening a chat. Set the
 profile's `proxy` if Teams is only reachable through a VPN.
 
-**Warm browser.** While Claude is using the tools, the MCP server keeps one
-headless browser open and syncs changed chats every ~30s, so new messages show
-up quickly and `sync_history`, `read_image` and `read_link` take seconds. It
-closes after 15 idle minutes. Turn it off with `live_sync = false`. A profile's
-browser serves one process at a time, so CLI browser commands report "in use"
-while the MCP server holds it. Behind a proxy, Teams' public script CDN
+**Warm browser.** One headless browser per profile is shared by every Claude
+session: the first MCP server that needs it starts `teams-reader broker` in the
+background, and all MCP servers send their browser work (`sync_history`,
+`read_image`, `read_link`, transcripts) to it over a Unix socket in the profile
+folder. The broker syncs changed chats every ~30s while any session is asking,
+so new messages show up quickly. When its Teams session expires, the next
+question that wants fresh data signs it in again (at most every 10 minutes).
+The broker exits after 30 idle minutes and starts again on demand. Turn it off
+with `live_sync = false`. CLI browser commands report "in use" while the broker
+holds the browser. Behind a proxy, Teams' public script CDN
 (`*.static.microsoft`, `*.cdn.office.net`) is fetched directly, so a first boot
 after a Teams update does not download the whole app through a slow VPN; sign-in
 and every API call still use the proxy. If it still outlasts the default wait
 ("Teams did not load"), set `load_timeout = 420` (seconds) in the profile.
 
-**Meeting transcripts.** When a meeting is recorded or transcribed, Teams posts
-a recording card in the meeting chat that links its WebVTT transcript.
-`list_transcripts` pages the meeting chats for new cards, downloads the
+**Meeting transcripts.** When a meeting or call is recorded or transcribed,
+Teams posts a recording card that links its WebVTT transcript: in the meeting
+chat for a scheduled meeting, in the group or 1:1 chat for a call started there.
+`list_transcripts` pages those chats for new cards, downloads the
 transcripts with the browser's cookies and keeps them in the store as
 `[mm:ss] Name: text` turns. Teams expires old transcripts; those are listed as
-`unavailable`.
+`unavailable`. Transcripts of calls started in a group chat need the session's
+auth header as well as its cookies; one still refused with 401 or 403 is listed
+as `forbidden` and retried after 10 minutes.
 
 **Automatic sign-in.** If the profile names a `credentials_env` dotenv file
 (with `email_key`/`password_key`), an expired session is signed in again during
