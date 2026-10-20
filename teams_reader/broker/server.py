@@ -9,6 +9,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import signal
 import socketserver
 import threading
 import time
@@ -165,6 +166,13 @@ def serve(data_dir: Path, sock_path: Path, db_file: Path, idle_after: float = DE
         server.shutdown()
 
     threading.Thread(target=stop_when_idle, name="broker-idle", daemon=True).start()
+
+    def on_term(_signum: int, _frame: Any) -> None:
+        # shutdown() waits for serve_forever, which runs on this thread: call it from another.
+        _log.info("broker asked to stop; closing the browser")
+        threading.Thread(target=server.shutdown, name="broker-stop", daemon=True).start()
+
+    signal.signal(signal.SIGTERM, on_term)
     try:
         server.serve_forever()
     finally:

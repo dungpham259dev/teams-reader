@@ -63,9 +63,9 @@ teams-reader update
 ```
 
 It pulls the latest version and its browser, and keeps your config, chats and
-sign-in. Then stop the running broker so the next request starts the new one
-(`pkill -f "teams_reader.cli.*broker"`), and run `/mcp` in each open Claude Code
-session (or restart it).
+sign-in, and stops the running browser broker so the next request starts one
+on the new code. Then run `/mcp` in each open Claude Code session (or restart
+it).
 Installs from before this command existed update once with:
 
 ```bash
@@ -214,9 +214,8 @@ teams-reader wipe --yes         # delete the store and snapshots
 - The store is a local copy of chat content that may belong to a client;
   decide per tenant whether that is acceptable. It lives under
   `~/Library/Application Support/teams-reader/`; `teams-reader wipe --yes`
-  deletes it. Stop the broker and the MCP servers first
-  (`pkill -f "teams_reader.cli.*broker"; pkill -f "teams-reader mcp"`), or they
-  keep writing to the deleted file.
+  deletes it. It stops the browser broker first and lists MCP servers that
+  still hold the old store open; run `/mcp` in those sessions afterwards.
 - No admin rights are needed. If reading the cache fails with "Operation not
   permitted", give your terminal Full Disk Access (System Settings → Privacy &
   Security) and restart it.

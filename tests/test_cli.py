@@ -31,6 +31,10 @@ def test_wipe_deletes_db_and_work(tmp_path, monkeypatch, capsys):
     cfg = tmp_path / "config.toml"
     cfg.write_text(f'[profiles.default]\ndata_dir = "{tmp_path}"\n')
     monkeypatch.setenv("TEAMS_READER_CONFIG", str(cfg))
+    from teams_reader.broker import control
+
+    monkeypatch.setattr(control, "stop", lambda data_dir, timeout=20.0: False)
+    monkeypatch.setattr(control, "mcp_server_pids", lambda: [])
 
     rc = cli.main(["wipe", "--yes"])
     assert rc == 0
@@ -296,6 +300,7 @@ def test_update_upgrades_the_uv_tool_then_the_browser(tmp_path, monkeypatch, cap
     monkeypatch.setattr(cli, "_uv_tool_dir", lambda: cli.Path(cli.sys.prefix).parent)
     monkeypatch.setattr(cli, "_snappy_flags", lambda: {"CPPFLAGS": "-Ix"})
     monkeypatch.setattr(cli.subprocess, "call", lambda cmd, **kw: calls.append((cmd, kw.get("env", {}).get("CPPFLAGS"))) or 0)
+    monkeypatch.setattr(cli, "_stop_brokers", lambda: None)
     assert cli.main(["update"]) == 0
     assert calls[0] == (["uv", "tool", "upgrade", "--reinstall-package", "teams-reader", "teams-reader"], "-Ix")
     assert calls[1][0][-1] == "install-browser"
@@ -308,3 +313,36 @@ def test_update_from_a_source_checkout_says_git_pull(monkeypatch, capsys):
     monkeypatch.setattr(cli.subprocess, "call", lambda *a, **k: pytest.fail("must not run"))
     assert cli.main(["update"]) == 1
     assert "git pull" in capsys.readouterr().err
+
+
+@pytest.mark.unit
+def test_update_stops_every_profiles_broker_so_new_code_runs(tmp_path, monkeypatch, capsys):
+    from teams_reader.broker import control
+
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(f'[profiles.a]\ndata_dir = "{tmp_path / "a"}"\n[profiles.b]\ndata_dir = "{tmp_path / "b"}"\n')
+    monkeypatch.setenv("TEAMS_READER_CONFIG", str(cfg))
+    stopped = []
+    monkeypatch.setattr(control, "stop", lambda data_dir, timeout=20.0: stopped.append(data_dir.name) or True)
+    monkeypatch.setattr(cli, "_uv_tool_dir", lambda: cli.Path(cli.sys.prefix).parent)
+    monkeypatch.setattr(cli, "_snappy_flags", lambda: {})
+    monkeypatch.setattr(cli.subprocess, "call", lambda cmd, **kw: 0)
+    assert cli.main(["update"]) == 0
+    assert stopped == ["a", "b"]
+
+
+@pytest.mark.unit
+def test_wipe_stops_the_broker_and_warns_about_open_mcp_servers(tmp_path, monkeypatch, capsys):
+    from teams_reader.broker import control
+
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(f'[profiles.default]\ndata_dir = "{tmp_path}"\n')
+    monkeypatch.setenv("TEAMS_READER_CONFIG", str(cfg))
+    stopped = []
+    monkeypatch.setattr(control, "stop", lambda data_dir, timeout=20.0: stopped.append(data_dir) or True)
+    monkeypatch.setattr(control, "mcp_server_pids", lambda: [4242])
+    assert cli.main(["wipe", "--yes"]) == 0
+    assert stopped == [tmp_path]
+    out = capsys.readouterr().out
+    assert "stopped the browser broker" in out
+    assert "4242" in out and "/mcp" in out

@@ -143,6 +143,10 @@ def _cmd_wipe(args: argparse.Namespace) -> int:
     if not args.yes:
         print("refusing to wipe without --yes")
         return 1
+    from teams_reader.broker import control
+
+    if control.stop(settings.active().data_dir):
+        print("stopped the browser broker")
     db = config.db_path()
     for path in (db, db.with_name(db.name + "-wal"), db.with_name(db.name + "-shm")):
         path.unlink(missing_ok=True)
@@ -150,6 +154,10 @@ def _cmd_wipe(args: argparse.Namespace) -> int:
     if work_dir.exists():
         shutil.rmtree(work_dir)
     print("wiped store and snapshots")
+    others = control.mcp_server_pids()
+    if others:
+        print(f"MCP servers still running (pid {', '.join(map(str, others))}) keep the old store open; "
+              "run /mcp in each Claude Code session (or restart it).")
     return 0
 
 
@@ -187,6 +195,20 @@ def _snappy_flags() -> dict[str, str]:
     return {"CPPFLAGS": f"-I{prefix}/include", "LDFLAGS": f"-L{prefix}/lib"}
 
 
+def _stop_brokers() -> None:
+    """Stop every profile's broker so the next request starts one on the new code."""
+    from teams_reader.broker import control
+
+    names, _ = settings.list_profiles()
+    for name in names:
+        try:
+            profile = settings.load_profile(name)
+        except settings.ConfigError:
+            continue
+        if control.stop(profile.data_dir):
+            print(f"Stopped the browser broker of profile {name!r}.")
+
+
 def _cmd_update(_: argparse.Namespace) -> int:
     tools = _uv_tool_dir()
     if tools is None or not Path(sys.prefix).resolve().is_relative_to(tools):
@@ -204,6 +226,7 @@ def _cmd_update(_: argparse.Namespace) -> int:
     code = subprocess.call([_installed_exe(), "install-browser"])
     if code != 0:
         return code
+    _stop_brokers()
     print("Updated; config, chats and sign-in are kept. In Claude Code run /mcp (or restart it) "
           "in each open session so the server uses the new version.")
     return 0
