@@ -217,6 +217,45 @@ def build_server(db_path: Path | None = None):
         return [image_cls(data=data, format=fmt) for data, fmt in out["images"]]
 
     @server.tool()
+    def list_transcripts(chat: str | None = None, refresh: bool = True) -> dict:
+        """Meeting transcripts (newest first) from recorded or transcribed Teams
+        meetings: title, start, duration, speakers. With `refresh`, first looks
+        for new ones in meeting chats and downloads them (seconds on a warm
+        browser). read_transcript returns the text."""
+        from teams_reader.browser import transcripts as transcripts_mod
+
+        chat_id = None
+        if chat:
+            with lock:
+                chat_id = tools.resolve_chat(conn, chat)
+            if chat_id is None:
+                return {"error": f"chat not found: {chat}"}
+        synced: dict | None = None
+        if refresh:
+            try:
+                if live is not None:
+                    live.touch()
+                    synced = live.run(lambda s, c: transcripts_mod.sync_with(c, s, chat_id))
+                else:
+                    own = db_mod.connect(db_file)
+                    try:
+                        synced = transcripts_mod.sync_once(own, chat_id)
+                    finally:
+                        own.close()
+            except Exception as exc:  # noqa: BLE001 - still list what is stored
+                synced = {"error": str(exc), "hint": "Run `teams-reader login` and ensure the VPN is up."}
+        with lock:
+            listed = tools.list_transcripts(conn, chat_id)
+        return {"transcripts": listed, "refresh": synced}
+
+    @server.tool()
+    def read_transcript(transcript_id: int, max_chars: int = 60000) -> dict:
+        """A meeting transcript as speaker turns, `[mm:ss] Name: text`, one per
+        line. Get ids from list_transcripts."""
+        with lock:
+            return tools.read_transcript(conn, transcript_id, max_chars=max_chars)
+
+    @server.tool()
     def sync_history(max_pages: int = 50, chat: str | None = None, full: bool = False) -> dict:
         """Sync from the Teams server now: real chat titles, new chats, and new
         messages (only chats with new activity unless `full`). A background sync

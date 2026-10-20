@@ -5,6 +5,7 @@ tools can be unit-tested directly and the MCP server stays a thin wrapper.
 """
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 from collections.abc import Callable
@@ -352,4 +353,42 @@ def suggest_reply(
         "recent": [_row_to_message(r, names) for r in db_mod.tail_chat(conn, chat_id, limit=limit)],
         "participants": participants,
         "guidance": _REPLY_GUIDANCE,
+    }
+
+
+def _transcript_summary(row: sqlite3.Row, names: dict[str, str]) -> dict[str, Any]:
+    return {
+        "transcript_id": row["transcript_id"],
+        "chat_id": row["chat_id"],
+        "chat": names.get(row["chat_id"], row["chat_id"]),
+        "title": row["title"],
+        "started_ts": row["started_ts"],
+        "started": _local_time(row["started_ts"]),
+        "duration_min": round(row["duration_s"] / 60) if row["duration_s"] else None,
+        "status": row["status"],
+        "speakers": json.loads(row["speakers"] or "[]"),
+        "chars": row["chars"],
+    }
+
+
+def list_transcripts(conn: sqlite3.Connection, chat: str | None = None) -> list[dict[str, Any]] | dict[str, Any]:
+    """Known meeting transcripts, newest first."""
+    chat_id = None
+    if chat:
+        chat_id = resolve_chat(conn, chat)
+        if chat_id is None:
+            return {"error": f"chat not found: {chat}"}
+    names = chat_names(conn)
+    return [_transcript_summary(r, names) for r in db_mod.list_transcripts(conn, chat_id)]
+
+
+def read_transcript(conn: sqlite3.Connection, transcript_id: int, max_chars: int = 60_000) -> dict[str, Any]:
+    row = db_mod.get_transcript(conn, transcript_id)
+    if row is None:
+        return {"error": f"no transcript: {transcript_id}"}
+    text = row["text"] or ""
+    return {
+        **_transcript_summary(row, chat_names(conn)),
+        "text": text[:max(0, max_chars)],
+        "truncated": len(text) > max_chars,
     }

@@ -104,6 +104,7 @@ Open Claude Code and ask, for example:
 | `chat_profile`, `suggest_reply` | participants' style, reply suggestions to copy (never sent) |
 | `list_images`, `read_image` | see a chat's images; the downloaded file is deleted after reading |
 | `list_links`, `read_link` | links shared in chats, and the page text behind them |
+| `list_transcripts`, `read_transcript` | transcripts of recorded or transcribed meetings, as speaker turns |
 | `sync_history` | pull new or full history from Teams web on demand |
 
 ## Profiles
@@ -152,9 +153,18 @@ headless browser open and syncs changed chats every ~30s, so new messages show
 up quickly and `sync_history`, `read_image` and `read_link` take seconds. It
 closes after 15 idle minutes. Turn it off with `live_sync = false`. A profile's
 browser serves one process at a time, so CLI browser commands report "in use"
-while the MCP server holds it. On a slow VPN, the first boot after a Teams update
-can outlast the default wait ("Teams did not load"); set `load_timeout = 420`
-(seconds) in the profile.
+while the MCP server holds it. Behind a proxy, Teams' public script CDN
+(`*.static.microsoft`, `*.cdn.office.net`) is fetched directly, so a first boot
+after a Teams update does not download the whole app through a slow VPN; sign-in
+and every API call still use the proxy. If it still outlasts the default wait
+("Teams did not load"), set `load_timeout = 420` (seconds) in the profile.
+
+**Meeting transcripts.** When a meeting is recorded or transcribed, Teams posts
+a recording card in the meeting chat that links its WebVTT transcript.
+`list_transcripts` pages the meeting chats for new cards, downloads the
+transcripts with the browser's cookies and keeps them in the store as
+`[mm:ss] Name: text` turns. Teams expires old transcripts; those are listed as
+`unavailable`.
 
 **Automatic sign-in.** If the profile names a `credentials_env` dotenv file
 (with `email_key`/`password_key`), an expired session is signed in again during

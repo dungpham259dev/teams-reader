@@ -59,3 +59,19 @@ CREATE TABLE IF NOT EXISTS sync_state (
     key    TEXT PRIMARY KEY,
     value  TEXT
 );
+
+CREATE TABLE IF NOT EXISTS transcripts (
+    transcript_id  INTEGER PRIMARY KEY,
+    url            TEXT NOT NULL UNIQUE,
+    chat_id        TEXT,
+    call_id        TEXT,
+    title          TEXT,
+    started_ts     INTEGER,
+    duration_s     INTEGER,
+    status         TEXT NOT NULL DEFAULT 'pending',
+    text           TEXT,
+    speakers       TEXT,
+    fetched_at     INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_transcripts_chat ON transcripts (chat_id, started_ts);

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Iterable
 
 from teams_reader.parse.messages import Message
+from teams_reader.parse.transcripts import TranscriptRef
 
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
@@ -44,6 +45,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     for name, ddl in _ADDED_COLUMNS.items():
         if name not in have:
             conn.execute(f"ALTER TABLE messages ADD COLUMN {name} {ddl}")
+    if "speakers" not in {r["name"] for r in conn.execute("PRAGMA table_info(transcripts)")}:
+        conn.execute("ALTER TABLE transcripts ADD COLUMN speakers TEXT")
     conn.commit()
 
 
@@ -377,5 +380,52 @@ def clear_all(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM chats")
     conn.execute("DELETE FROM attachments")
     conn.execute("DELETE FROM links")
+    conn.execute("DELETE FROM transcripts")
     conn.execute("DELETE FROM sync_state")
     conn.commit()
+
+
+def add_transcript_ref(conn: sqlite3.Connection, chat_id: str, ref: TranscriptRef) -> bool:
+    """Remember a meeting's transcript; True when it was not known yet."""
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO transcripts (url, chat_id, call_id, title, started_ts, duration_s) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (ref.url, chat_id, ref.call_id, ref.title, ref.started_ts, ref.duration_s),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def pending_transcripts(conn: sqlite3.Connection, limit: int = 20) -> list[str]:
+    rows = conn.execute(
+        "SELECT url FROM transcripts WHERE status = 'pending' ORDER BY started_ts DESC LIMIT ?", (limit,)
+    ).fetchall()
+    return [r["url"] for r in rows]
+
+
+def set_transcript(
+    conn: sqlite3.Connection, url: str, status: str, fetched_at: int,
+    text: str | None = None, speakers: list[str] | None = None,
+) -> None:
+    conn.execute(
+        "UPDATE transcripts SET status = ?, text = ?, speakers = ?, fetched_at = ? WHERE url = ?",
+        (status, text, json.dumps(speakers or []), fetched_at, url),
+    )
+    conn.commit()
+
+
+def list_transcripts(conn: sqlite3.Connection, chat_id: str | None = None) -> list[sqlite3.Row]:
+    query = (
+        "SELECT transcript_id, url, chat_id, title, started_ts, duration_s, status, speakers, "
+        "LENGTH(COALESCE(text, '')) AS chars FROM transcripts"
+    )
+    params: tuple = ()
+    if chat_id is not None:
+        query, params = query + " WHERE chat_id = ?", (chat_id,)
+    return conn.execute(query + " ORDER BY started_ts DESC", params).fetchall()
+
+
+def get_transcript(conn: sqlite3.Connection, transcript_id: int) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT *, LENGTH(COALESCE(text, '')) AS chars FROM transcripts WHERE transcript_id = ?", (transcript_id,)
+    ).fetchone()
