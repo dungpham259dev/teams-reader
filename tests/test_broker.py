@@ -111,7 +111,8 @@ def test_sync_job_returns_a_plain_summary(live, monkeypatch):
     reply = server_mod.Broker(live).handle(
         {"op": "job", "job": "sync", "args": {"chat_filter": "c1", "full": True, "max_pages": 5}}
     )
-    assert reply == {"ok": {"chats_synced": 2, "new_messages": 3, "total_messages": 9}}
+    assert reply == {"ok": {"chats_synced": 2, "new_messages": 3, "total_messages": 9,
+                            "failed_chats": 0, "last_error": None}}
     assert seen == {"chat_filter": "c1", "full": True, "max_pages": 5}
 
 

@@ -27,6 +27,7 @@ class ChatBackfill:
     messages: list[Message] = field(default_factory=list)
     # True only when the needed history was fully read (no page cap, no fetch error).
     complete: bool = False
+    error: str | None = None
 
 
 def collect_messages(
@@ -42,10 +43,12 @@ def collect_messages(
     url: str | None = first_url
     pages = 0
     complete = False
+    error: str | None = None
     while url and pages < max_pages:
         payload = fetch(url)
         pages += 1
         if payload is None or (isinstance(payload, dict) and "error" in payload):
+            error = "empty response" if payload is None else str(payload["error"])
             break
         page = chatsvc.parse_page(payload, chat_id=chat_id)
         messages.extend(page)
@@ -54,7 +57,7 @@ def collect_messages(
             break
         url = chatsvc.backward_link(payload)
         complete = url is None
-    return ChatBackfill(chat_id=chat_id, pages=pages, messages=messages, complete=complete)
+    return ChatBackfill(chat_id=chat_id, pages=pages, messages=messages, complete=complete, error=error)
 
 
 @dataclass(frozen=True)
@@ -62,6 +65,8 @@ class BackfillSummary:
     chats_synced: int
     new_messages: int
     total_messages: int
+    failed_chats: int = 0
+    last_error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -136,8 +141,13 @@ def sync_with(
     last activity, so only new or changed chats are fetched (``full`` refetches
     all), and paging stops once already-stored history is reached.
     """
+    from teams_reader import logs
+
+    log = logs.get("sync")
     added = 0
     synced = 0
+    failed = 0
+    last_error: str | None = None
     for target, activity in _targets(conn, fetch, template_url, chat_filter, full):
         first = chatsvc.with_conversation(template_url, target.chat_id)
         result = collect_messages(
@@ -148,14 +158,17 @@ def sync_with(
         # A capped or failed read leaves the watermark, so the gap is retried.
         if result.complete:
             db_mod.set_chat_watermark(conn, target.chat_id, activity or 0)
+        if result.error is not None:
+            failed += 1
+            last_error = result.error
+            log.warning("chat %s: page %d failed (%s); retried next sync", target.name, result.pages, result.error)
         synced += 1
         if on_progress is not None:
             on_progress(target.name, result.pages, len(result.messages))
     total = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
-    from teams_reader import logs
-
-    logs.get("sync").debug("synced %d chats: %d new, %d stored", synced, added, total)
-    return BackfillSummary(chats_synced=synced, new_messages=added, total_messages=total)
+    log.debug("synced %d chats: %d new, %d stored", synced, added, total)
+    return BackfillSummary(chats_synced=synced, new_messages=added, total_messages=total,
+                           failed_chats=failed, last_error=last_error)
 
 
 def backfill(

@@ -326,6 +326,9 @@ def build_server(db_path: Path | None = None):
             "new_messages": summary.new_messages,
             "total_messages": summary.total_messages,
         }
+        if summary.failed_chats:
+            result["failed_chats"] = summary.failed_chats
+            result["last_error"] = summary.last_error
         if live is not None:
             result["background"] = live.status()
         return result

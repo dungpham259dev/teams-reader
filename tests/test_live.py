@@ -265,3 +265,19 @@ def test_failed_open_closes_the_context_so_the_profile_lock_is_freed(monkeypatch
     with pytest.raises(TimeoutError):
         live_mod.PlaywrightSession(interactive=False)
     assert events == ["context closed", "playwright stopped"]
+
+
+@pytest.mark.unit
+def test_failed_chats_are_counted_and_their_error_kept():
+    conn = db_mod.connect(":memory:")
+    summary = backfill.sync_with(conn, _paged_server(pages_needed=1, fail_with=429), TPL)
+    assert summary.failed_chats == 1
+    assert summary.last_error == "429"
+
+
+@pytest.mark.unit
+def test_a_clean_sync_reports_no_failures():
+    conn = db_mod.connect(":memory:")
+    fetch, _ = _server()
+    summary = backfill.sync_with(conn, fetch, TPL)
+    assert (summary.failed_chats, summary.last_error) == (0, None)

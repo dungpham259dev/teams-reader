@@ -192,8 +192,10 @@ class LiveSync:
         started_wall = time.time()
         try:
             summary = self.sync(interactive=False, max_pages=_BACKGROUND_MAX_PAGES)
-            _log.info("background sync: %s chats changed, %s new messages (%.1fs)",
+            failed = getattr(summary, "failed_chats", 0)
+            _log.info("background sync: %s chats changed, %s new messages%s (%.1fs)",
                       getattr(summary, "chats_synced", "?"), getattr(summary, "new_messages", "?"),
+                      f", {failed} failed ({getattr(summary, 'last_error', None)})" if failed else "",
                       time.monotonic() - now)
             self._last_error = None
             self._failures = 0

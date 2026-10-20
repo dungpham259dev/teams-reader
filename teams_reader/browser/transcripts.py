@@ -51,6 +51,10 @@ def _scan_chat(
     for _ in range(_RESCAN_PAGES if scanned else _FIRST_SCAN_PAGES):
         payload = fetch(url)
         if not isinstance(payload, dict) or not isinstance(payload.get("messages"), list):
+            from teams_reader import logs
+
+            logs.get("sync").warning("transcript scan of %s stopped: %s", chat_id,
+                                     payload.get("error") if isinstance(payload, dict) else "empty response")
             break
         read_pages += 1
         added += sum(db_mod.add_transcript_ref(conn, chat_id, ref) for ref in parse.extract_refs(payload["messages"]))
