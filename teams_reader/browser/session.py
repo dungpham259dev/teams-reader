@@ -94,6 +94,16 @@ def proxy_server() -> str | None:
     return settings.active().proxy
 
 
+# Teams' public script CDN: a cold boot pulls ~370 files that time out over a slow VPN.
+# Sign-in and API hosts stay on the proxy, where Conditional Access checks the IP.
+_DIRECT_HOSTS = ("*.static.microsoft", "*.cdn.office.net")
+
+
+def proxy_options(server: str) -> dict[str, str]:
+    """Playwright proxy settings that send only the static CDN direct."""
+    return {"server": server, "bypass": ",".join(_DIRECT_HOSTS)}
+
+
 def launch_context(playwright: Any, headless: bool = False) -> Any:
     """A persistent Chromium context so the Teams login survives between runs."""
     from teams_reader.browser import profile_lock
@@ -102,7 +112,7 @@ def launch_context(playwright: Any, headless: bool = False) -> Any:
     lock = profile_lock.acquire(profile.data_dir, profile.name)  # fail fast, don't hang
     options: dict[str, Any] = {"headless": headless, "viewport": {"width": 1280, "height": 900}}
     if proxy_server():
-        options["proxy"] = {"server": proxy_server()}
+        options["proxy"] = proxy_options(proxy_server())
     try:
         profile.browser_dir.mkdir(parents=True, exist_ok=True)
         context = playwright.chromium.launch_persistent_context(

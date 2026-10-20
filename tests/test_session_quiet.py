@@ -82,3 +82,18 @@ def test_open_timeout_defaults_and_profile_override():
     assert session.open_timeout_ms(interactive=False, load_timeout_s=None) == 75_000
     assert session.open_timeout_ms(interactive=True, load_timeout_s=420) == 420_000
     assert session.open_timeout_ms(interactive=False, load_timeout_s=420) == 420_000
+
+
+@pytest.mark.unit
+def test_proxy_options_send_static_cdn_direct():
+    options = session.proxy_options("socks5://127.0.0.1:1080")
+    assert options["server"] == "socks5://127.0.0.1:1080"
+    assert "*.static.microsoft" in options["bypass"].split(",")
+
+
+@pytest.mark.unit
+def test_proxy_bypass_never_covers_sign_in_or_api_hosts():
+    patterns = session.proxy_options("socks5://p:1")["bypass"].split(",")
+    for host in ("login.microsoftonline.com", "teams.microsoft.com", "teams.cloud.microsoft",
+                 "eu-prod.asyncgw.teams.microsoft.com", "contoso-my.sharepoint.com"):
+        assert not any(host.endswith(p.lstrip("*")) for p in patterns), host
