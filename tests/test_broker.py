@@ -296,3 +296,43 @@ def test_socket_is_private_to_the_user(served):
 
     assert stat.S_IMODE(os.stat(served).st_mode) == 0o600
     assert client_mod.owned_by_me(served)
+
+
+@pytest.mark.unit
+def test_fresh_runs_a_sync_and_records_it(live, monkeypatch):
+    from teams_reader.mcp import freshness
+
+    synced = []
+    monkeypatch.setattr(jobs_mod.backfill, "sync_with", lambda conn, fetch, tpl, **kw: synced.append(kw) or
+                        BackfillSummary(chats_synced=1, new_messages=1, total_messages=1))
+    now = [1000.0]
+    broker = server_mod.Broker(live, wall=lambda: now[0])
+    reply = broker.handle({"op": "fresh", "since": 999.0})
+    assert reply["ok"]["synced"] is True
+    assert len(synced) == 1
+    conn = db.connect(live.db_file)
+    assert freshness.synced_at(conn) == 1000.0
+
+
+@pytest.mark.unit
+def test_fresh_reuses_a_sync_that_started_after_the_question(live, monkeypatch):
+    synced = []
+    monkeypatch.setattr(jobs_mod.backfill, "sync_with", lambda conn, fetch, tpl, **kw: synced.append(1) or
+                        BackfillSummary(chats_synced=0, new_messages=0, total_messages=0))
+    now = [1000.0]
+    broker = server_mod.Broker(live, wall=lambda: now[0])
+    broker.handle({"op": "fresh", "since": 999.0})
+    reply = broker.handle({"op": "fresh", "since": 999.5})  # asked before that sync began
+    assert reply["ok"]["synced"] is False
+    now[0] = 1010.0
+    broker.handle({"op": "fresh", "since": 1009.0})  # a newer question needs a new sync
+    assert len(synced) == 2
+
+
+@pytest.mark.unit
+def test_fresh_also_asks_the_live_sync_to_recover_a_lost_login(live, monkeypatch):
+    monkeypatch.setattr(jobs_mod.backfill, "sync_with", lambda *a, **k:
+                        BackfillSummary(chats_synced=0, new_messages=0, total_messages=0))
+    broker = server_mod.Broker(live)
+    broker.handle({"op": "fresh", "since": 0.0})
+    assert live.recovered == 1 and live.touches >= 1

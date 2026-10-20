@@ -190,3 +190,23 @@ def test_lost_login_is_recovered_once_a_fresh_question_arrives(tmp_path, monkeyp
         assert interactive == [False, True]
     finally:
         live.close()
+
+
+@pytest.mark.unit
+def test_a_question_already_answered_by_a_fresh_sync_does_not_sync_again(tmp_path):
+    from teams_reader.mcp import freshness
+    from teams_reader.store import db as db_mod
+
+    live = livesync.LiveSync(tmp_path / "s.db", browser_factory=_FakeBrowser, interval=1000)
+    conn = db_mod.connect(tmp_path / "s.db")
+    try:
+        now = time.monotonic()
+        live._last_use = now
+        live._last_sync = now - 10  # past the minimum gap, well inside the interval
+        freshness.mark_used(conn, 1_000.0)
+        assert live._due(conn, now)  # asked, nothing synced since
+        freshness.mark_synced(conn, 1_000.5)
+        assert not live._due(conn, now)
+    finally:
+        conn.close()
+        live.close()

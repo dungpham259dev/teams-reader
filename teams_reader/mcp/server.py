@@ -113,26 +113,20 @@ def build_server(db_path: Path | None = None):
     live = _broker_live(profile) if livesync.enabled() else None
 
     def _await_fresh() -> None:
-        """Let the browser holder (any session) sync before answering."""
-        from teams_reader.browser import profile_lock
-
+        """Have the broker sync before answering, so messages sent seconds ago show."""
         asked = time.time()
         with lock:
             freshness.mark_used(conn, asked)
         if live is None:
             return
         try:
-            live.touch(fresh=True)
+            outcome = live.fresh(asked)
         except Exception as exc:  # noqa: BLE001 - answer from the store; freshness reports the gap
-            log.warning("could not reach the browser broker: %s", exc)
+            log.warning("no fresh sync before answering (%.1fs): %s", time.time() - asked, exc)
             return
-        waiter = db_mod.connect(db_file)  # sleeps without holding the shared connection
-        try:
-            outcome = freshness.wait_fresh(waiter, asked, syncing=profile_lock.is_held(profile.data_dir))
-        finally:
-            waiter.close()
-        if outcome != "fresh":
-            log.info("freshness before answering: %s (%.1fs)", outcome, time.time() - asked)
+        log.info("fresh sync before answering: %s new messages%s (%.1fs)",
+                 outcome.get("new_messages", 0), "" if outcome.get("synced") else ", shared",
+                 time.time() - asked)
 
     def _query(fn, *args, fresh: bool = False, **kwargs):
         """Run a store tool; ``fresh`` tools answer about a chat's current state

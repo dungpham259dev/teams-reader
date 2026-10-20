@@ -32,25 +32,6 @@ def conn(tmp_path):
     c.close()
 
 
-# --- 1. never wait on a sync that is not actually running -------------------
-
-@pytest.mark.unit
-def test_no_wait_when_the_last_sync_is_old(conn):
-    """A holder stuck opening its browser has no error yet; the only sign is
-    that no sync landed for minutes. Then answer at once instead of waiting 8s."""
-    freshness.mark_synced(conn, 1_000.0 - freshness.ALIVE_S - 1)
-    clock = Clock(1_000.0)
-    assert freshness.wait_fresh(conn, used_at=1_000.0, syncing=True, now=clock, sleep=clock.sleep) == "not syncing"
-    assert clock.t == 1_000.0
-
-
-@pytest.mark.unit
-def test_no_wait_when_never_synced(conn):
-    clock = Clock(1_000.0)
-    assert freshness.wait_fresh(conn, used_at=1_000.0, syncing=True, now=clock, sleep=clock.sleep) == "not syncing"
-    assert clock.t == 1_000.0
-
-
 # --- 2. compact per-message payloads ----------------------------------------
 
 @pytest.mark.unit

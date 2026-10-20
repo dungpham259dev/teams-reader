@@ -23,6 +23,8 @@ from teams_reader.broker import jobs as jobs_mod
 DEFAULT_IDLE_AFTER = 1800.0
 # A job queued behind a Teams sign-in waits; this bounds how long a tool call hangs.
 JOB_TIMEOUT_S = 300.0
+# Covers a cold start (browser ~20-30s) plus one sync; past it the answer comes from the store.
+FRESH_TIMEOUT_S = 45.0
 _MAX_REQUEST_BYTES = 1 << 20
 _READ_TIMEOUT_S = 10.0
 _log = logs.get("broker")
@@ -30,8 +32,11 @@ _log = logs.get("broker")
 
 class Broker:
     def __init__(self, live: Any, idle_after: float = DEFAULT_IDLE_AFTER,
-                 clock: Callable[[], float] = time.monotonic) -> None:
+                 clock: Callable[[], float] = time.monotonic, wall: Callable[[], float] = time.time) -> None:
         self._live = live
+        self._wall = wall
+        self._fresh_lock = threading.Lock()
+        self._fresh_started: float | None = None
         self._idle_after = idle_after
         self._clock = clock
         self._last_request = clock()
@@ -79,12 +84,28 @@ class Broker:
                 return {"ok": True}
             if op == "job":
                 return self._job(request)
+            if op == "fresh":
+                return self._fresh(float(request.get("since") or 0.0))
         except FutureTimeout:
             return {"error": f"the browser job did not finish within {JOB_TIMEOUT_S:.0f}s "
                              "(a Teams sign-in may be in progress)", "type": "TimeoutError"}
         except Exception as exc:  # noqa: BLE001 - delivered to the client
             return {"error": str(exc), "type": type(exc).__name__}
         return {"error": f"unknown op: {op}"}
+
+    def _fresh(self, since: float) -> dict[str, Any]:
+        """Sync before a question is answered; questions asked while one sync
+        runs share the next one instead of queueing a sync each."""
+        self._live.touch()
+        self._live.recover_login()
+        with self._fresh_lock:
+            if self._fresh_started is not None and self._fresh_started >= since:
+                return {"ok": {"synced": False}}
+            started = self._wall()
+            self._fresh_started = started
+            summary = self._live.run(lambda session, conn: jobs_mod.fresh_sync(session, conn, started),
+                                     timeout=FRESH_TIMEOUT_S, interactive=False)
+        return {"ok": {"synced": True, **summary}}
 
     def _job(self, request: dict[str, Any]) -> dict[str, Any]:
         name = str(request.get("job"))

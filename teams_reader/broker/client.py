@@ -66,6 +66,9 @@ class BrokerClient:
     def touch(self, fresh: bool = False) -> None:
         self._call({"op": "touch", "fresh": fresh})
 
+    def fresh(self, since: float) -> dict[str, Any]:
+        return self._call({"op": "fresh", "since": since})
+
     def status(self) -> dict[str, Any]:
         return self._call({"op": "status"})
 
@@ -137,6 +140,10 @@ class LiveProxy:
 
     def job(self, name: str, **args: Any) -> Any:
         return self._client.job(name, **args)
+
+    def fresh(self, since: float) -> dict[str, Any]:
+        """Return once the broker synced after ``since`` (a question's time)."""
+        return self._client.fresh(since)
 
     def sync(self, **kwargs: Any) -> BackfillSummary:
         return BackfillSummary(**self._client.job("sync", **kwargs))

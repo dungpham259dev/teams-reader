@@ -154,8 +154,11 @@ profile's `proxy` if Teams is only reachable through a VPN.
 session: the first MCP server that needs it starts `teams-reader broker` in the
 background, and all MCP servers send their browser work (`sync_history`,
 `read_image`, `read_link`, transcripts) to it over a Unix socket in the profile
-folder. The broker syncs changed chats every ~30s while any session is asking,
-so new messages show up quickly. When its Teams session expires, the next
+folder. Before answering about a chat's current state (`list_chats`,
+`read_chat`, `recent`, `suggest_reply`) the MCP server has the broker sync
+first, so a message sent seconds ago is included: about 3s with the browser
+open, about 20s right after the broker started. Questions asked during one sync
+share it. Between questions the broker syncs changed chats every ~30s. When its Teams session expires, the next
 question that wants fresh data signs it in again (at most every 10 minutes).
 The broker exits after 30 idle minutes and starts again on demand. Turn it off
 with `live_sync = false`. CLI browser commands report "in use" while the broker

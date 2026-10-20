@@ -10,7 +10,10 @@ import sqlite3
 from typing import Any, Callable
 
 from teams_reader.browser import backfill, images, links, transcripts
+from teams_reader.mcp import freshness
 from teams_reader.store import db as db_mod
+
+_FRESH_MAX_PAGES = 20
 
 Job = Callable[[Any, sqlite3.Connection, dict[str, Any]], Any]
 
@@ -23,6 +26,13 @@ def _sync(session: Any, conn: sqlite3.Connection, args: dict[str, Any]) -> dict[
         max_pages=int(args.get("max_pages", backfill.DEFAULT_MAX_PAGES)),
     )
     return dataclasses.asdict(summary)
+
+
+def fresh_sync(session: Any, conn: sqlite3.Connection, started: float) -> dict[str, Any]:
+    """An incremental sync for a question that wants current data."""
+    summary = _sync(session, conn, {"max_pages": _FRESH_MAX_PAGES})
+    freshness.mark_synced(conn, started)
+    return summary
 
 
 def _transcripts(session: Any, conn: sqlite3.Connection, args: dict[str, Any]) -> dict[str, int]:

@@ -178,7 +178,9 @@ class LiveSync:
         if self._failures:
             interval = backoff(self._interval, self._failures)
             return should_sync(now, last_use, self._last_sync, interval, self._idle_after)
-        asked = shared is not None and (self._synced_wall is None or shared > self._synced_wall)
+        # A question's own fresh sync (run by the broker) also counts as answered.
+        synced = max((t for t in (self._synced_wall, freshness.synced_at(conn)) if t is not None), default=None)
+        asked = shared is not None and (synced is None or shared > synced)
         gap_ok = self._last_sync is None or now - self._last_sync >= _MIN_GAP
         interval = sync_interval(self._interval, now - last_use if last_use is not None else 0.0)
         return should_sync(now, last_use, self._last_sync, interval, self._idle_after) or (asked and gap_ok)
