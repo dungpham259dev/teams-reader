@@ -32,6 +32,7 @@ def _local_time(ts: int | None) -> str | None:
 
 
 def _row_to_message(row: sqlite3.Row, names: dict[str, str]) -> dict[str, Any]:
+    """A hit from several chats: says which chat and carries `ts` for windows."""
     return {
         "msg_id": row["msg_id"],
         "chat_id": row["chat_id"],
@@ -40,9 +41,28 @@ def _row_to_message(row: sqlite3.Row, names: dict[str, str]) -> dict[str, Any]:
         "ts": row["ts"],
         "time": _local_time(row["ts"]),
         "text": row["text"],
-        "quoted_text": row["quoted_text"],
-        "edited": bool(row["edited"]),
     }
+
+
+def _chat_row(row: sqlite3.Row) -> dict[str, Any]:
+    """A message inside one chat: the envelope names the chat and the last ts,
+    so rows carry only what differs (quote/edit flags only when set)."""
+    out = {
+        "msg_id": row["msg_id"],
+        "sender": row["sender"],
+        "time": _local_time(row["ts"]),
+        "text": row["text"],
+    }
+    if row["quoted_text"]:
+        out["quoted_text"] = row["quoted_text"]
+    if row["edited"]:
+        out["edited"] = True
+    return out
+
+
+def _last_ts(rows: list[sqlite3.Row]) -> int | None:
+    stamps = [r["ts"] for r in rows if r["ts"] is not None]
+    return max(stamps) if stamps else None
 
 
 def _fallback_name(chat_id: str, senders: list[tuple[str, int]], me: str | None) -> str:
@@ -134,7 +154,8 @@ def read_chat(
         "chat_name": names.get(chat_id, chat_id),
         "total": total,
         "truncated": len(rows) < total if since is None else len(rows) == limit,
-        "messages": [_row_to_message(r, names) for r in rows],
+        "last_ts": _last_ts(rows),
+        "messages": [_chat_row(r) for r in rows],
     }
 
 
@@ -350,7 +371,7 @@ def suggest_reply(
         "chat_name": names.get(chat_id, chat_id),
         "kind": row["kind"] if row else None,
         "intent": intent,
-        "recent": [_row_to_message(r, names) for r in db_mod.tail_chat(conn, chat_id, limit=limit)],
+        "recent": [_chat_row(r) for r in db_mod.tail_chat(conn, chat_id, limit=limit)],
         "participants": participants,
         "guidance": _REPLY_GUIDANCE,
     }

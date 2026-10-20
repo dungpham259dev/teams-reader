@@ -20,6 +20,8 @@ SYNCED_KEY = "web_synced_at"
 ERROR_KEY = "web_sync_error"
 FRESH_S = 15.0
 WAIT_S = 8.0
+# A holder that synced this recently is alive; otherwise it is booting/broken.
+ALIVE_S = 180.0
 _STEP_S = 0.5
 
 
@@ -59,12 +61,15 @@ def wait_fresh(
     """Wait up to ``WAIT_S`` for a web sync newer than ``used_at``.
 
     ``syncing`` says a warm browser exists (this process or another). Never
-    waits when web sync is failing or absent, so answers stay instant then.
+    waits when web sync is failing, absent or silent for ``ALIVE_S`` (a holder
+    still opening its browser), so answers stay instant then.
     """
     last = synced_at(conn)
     if last is not None and used_at - last <= FRESH_S:
         return "fresh"
     if not syncing or db_mod.get_state(conn, ERROR_KEY):
+        return "not syncing"
+    if last is None or used_at - last > ALIVE_S:
         return "not syncing"
     while now() - used_at < WAIT_S:
         sleep(_STEP_S)

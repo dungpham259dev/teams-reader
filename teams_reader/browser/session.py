@@ -104,15 +104,27 @@ def proxy_options(server: str) -> dict[str, str]:
     return {"server": server, "bypass": ",".join(_DIRECT_HOSTS)}
 
 
+_DISK_CACHE_BYTES = 100 * 1024 * 1024  # the profile grew to 800 MB uncapped
+
+
+def launch_options(headless: bool) -> dict[str, Any]:
+    options: dict[str, Any] = {
+        "headless": headless,
+        "viewport": {"width": 1280, "height": 900},
+        "args": [f"--disk-cache-size={_DISK_CACHE_BYTES}"],
+    }
+    if proxy_server():
+        options["proxy"] = proxy_options(proxy_server())
+    return options
+
+
 def launch_context(playwright: Any, headless: bool = False) -> Any:
     """A persistent Chromium context so the Teams login survives between runs."""
     from teams_reader.browser import profile_lock
 
     profile = settings.active()
     lock = profile_lock.acquire(profile.data_dir, profile.name)  # fail fast, don't hang
-    options: dict[str, Any] = {"headless": headless, "viewport": {"width": 1280, "height": 900}}
-    if proxy_server():
-        options["proxy"] = proxy_options(proxy_server())
+    options = launch_options(headless)
     try:
         profile.browser_dir.mkdir(parents=True, exist_ok=True)
         context = playwright.chromium.launch_persistent_context(

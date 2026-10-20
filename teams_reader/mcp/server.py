@@ -27,6 +27,12 @@ def _server_class():
         return FastMCP
 
 
+def _annotations(read_only: bool):
+    from mcp.types import ToolAnnotations
+
+    return ToolAnnotations(readOnlyHint=read_only, destructiveHint=False, openWorldHint=not read_only)
+
+
 def _image_class():
     """Return the MCP Image helper across SDK versions."""
     try:
@@ -49,6 +55,19 @@ def instructions(profile_name: str) -> str:
     )
 
 
+_TRANSCRIPT_SYNC_KEY = "transcripts_synced_at"
+_TRANSCRIPT_SYNC_WINDOW_S = 120.0
+
+
+def _recent_transcript_sync(conn) -> int | None:
+    """Seconds since the last transcript sync when it is inside the window."""
+    raw = db_mod.get_state(conn, _TRANSCRIPT_SYNC_KEY)
+    if not raw:
+        return None
+    age = time.time() - float(raw)
+    return round(age) if age < _TRANSCRIPT_SYNC_WINDOW_S else None
+
+
 def build_server(db_path: Path | None = None):
     config.ensure_app_dirs()
     db_file = db_path or config.db_path()
@@ -59,7 +78,9 @@ def build_server(db_path: Path | None = None):
     log.info("server ready (store %s, live sync %s)", db_file, "on" if livesync.enabled() else "off")
     register = server.tool
 
-    def logged_tool(**options):
+    def logged_tool(read_only: bool = True, **options):
+        options.setdefault("annotations", _annotations(read_only))
+
         def decorate(fn):
             @functools.wraps(fn)
             def call(*args, **kwargs):
@@ -103,8 +124,11 @@ def build_server(db_path: Path | None = None):
         if outcome != "fresh":
             log.info("freshness before answering: %s (%.1fs)", outcome, time.time() - asked)
 
-    def _query(fn, *args, **kwargs):
-        _await_fresh()
+    def _query(fn, *args, fresh: bool = False, **kwargs):
+        """Run a store tool; ``fresh`` tools answer about a chat's current state
+        and so trigger (and briefly wait for) a web sync first."""
+        if fresh:
+            _await_fresh()
         with lock:
             refresh.maybe_refresh(conn, fingerprint_fn=refresh.work_cache_fingerprint)
             result = fn(conn, *args, **kwargs)
@@ -116,14 +140,14 @@ def build_server(db_path: Path | None = None):
     def list_chats() -> list[dict]:
         """List Teams chats, newest first. Untitled chats are named after their
         participants (`named` is false for those)."""
-        return _query(tools.list_chats)
+        return _query(tools.list_chats, fresh=True)
 
     @server.tool()
     def read_chat(name_or_id: str, since: int | None = None, limit: int = 200) -> dict:
         """Read a chat by name (partial, or a participant's name) or id. Without
         `since`: the latest `limit` messages, oldest first; with `since` (ms): the
         messages after it. Reports `total` and `truncated`."""
-        return _query(tools.read_chat, name_or_id, since=since, limit=limit)
+        return _query(tools.read_chat, name_or_id, since=since, limit=limit, fresh=True)
 
     @server.tool()
     def search(
@@ -140,7 +164,7 @@ def build_server(db_path: Path | None = None):
     @server.tool()
     def recent(since: int = 0, limit: int = 100) -> list[dict]:
         """Newest messages since a timestamp (ms)."""
-        return _query(tools.recent, since=since, limit=limit)
+        return _query(tools.recent, since=since, limit=limit, fresh=True)
 
     @server.tool()
     def ask(question: str, limit: int = 30) -> dict:
@@ -151,7 +175,7 @@ def build_server(db_path: Path | None = None):
     def suggest_reply(name_or_id: str, intent: str | None = None, limit: int = 15) -> dict:
         """Context (recent thread + participant profiles + chat kind) for writing
         adaptive reply options to copy into a chat."""
-        return _query(tools.suggest_reply, name_or_id, intent=intent, limit=limit)
+        return _query(tools.suggest_reply, name_or_id, intent=intent, limit=limit, fresh=True)
 
     @server.tool()
     def chat_profile(name_or_id: str) -> dict:
@@ -231,7 +255,11 @@ def build_server(db_path: Path | None = None):
             if chat_id is None:
                 return {"error": f"chat not found: {chat}"}
         synced: dict | None = None
-        if refresh:
+        with lock:
+            recently = _recent_transcript_sync(conn)
+        if refresh and recently is not None:
+            synced = {"skipped": f"synced {recently}s ago; pass refresh=true again later or sync_history"}
+        elif refresh:
             try:
                 if live is not None:
                     live.touch()
@@ -244,6 +272,9 @@ def build_server(db_path: Path | None = None):
                         own.close()
             except Exception as exc:  # noqa: BLE001 - still list what is stored
                 synced = {"error": str(exc), "hint": "Run `teams-reader login` and ensure the VPN is up."}
+            else:
+                with lock:
+                    db_mod.set_state(conn, _TRANSCRIPT_SYNC_KEY, repr(time.time()))
         with lock:
             listed = tools.list_transcripts(conn, chat_id)
         return {"transcripts": listed, "refresh": synced}
@@ -255,7 +286,7 @@ def build_server(db_path: Path | None = None):
         with lock:
             return tools.read_transcript(conn, transcript_id, max_chars=max_chars)
 
-    @server.tool()
+    @server.tool(read_only=False)
     def sync_history(max_pages: int = 50, chat: str | None = None, full: bool = False) -> dict:
         """Sync from the Teams server now: real chat titles, new chats, and new
         messages (only chats with new activity unless `full`). A background sync

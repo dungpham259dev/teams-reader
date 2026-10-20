@@ -5,6 +5,7 @@ tests without touching the real Teams cache.
 """
 from __future__ import annotations
 
+import shutil
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -85,6 +86,16 @@ def ingest(
         )
     work = work_dir if work_dir is not None else settings.active().work_dir
     work.mkdir(parents=True, exist_ok=True)
-    snap = snapshot_fn(leveldb, work / "snapshot")
-    dump_path = dump_fn(snap, work / "dump.jsonl")
-    return ingest_from_dump(conn, dump_path, account=settings.active().account)
+    snap = work / "snapshot"
+    dump_path = work / "dump.jsonl"
+    try:
+        dump_fn(snapshot_fn(leveldb, snap), dump_path)
+        return ingest_from_dump(conn, dump_path, account=settings.active().account)
+    finally:
+        _discard(snap, dump_path)
+
+
+def _discard(snap: Path, dump_path: Path) -> None:
+    # The snapshot and the ~50 MB dump are scratch; the store holds the result.
+    shutil.rmtree(snap, ignore_errors=True)
+    dump_path.unlink(missing_ok=True)

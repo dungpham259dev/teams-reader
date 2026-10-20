@@ -24,12 +24,25 @@ DEFAULT_IDLE_AFTER = 900.0
 _BACKOFF_CAP = 600.0
 _BACKGROUND_MAX_PAGES = 20
 _MIN_GAP = 3.0  # between syncs triggered by questions
+ACTIVE_S = 120.0  # after the last question, keep the short interval this long
+QUIET_FACTOR = 4
+IN_USE_TICK_FACTOR = 5
 _log = logs.get("sync")
 
 
 def backoff(interval: float, failures: int, cap: float = _BACKOFF_CAP) -> float:
     """Wait longer after consecutive failures (VPN down, not logged in)."""
     return min(interval * (2 ** min(failures, 10)), cap)
+
+
+def sync_interval(interval: float, since_use: float) -> float:
+    """Short interval right after a question, wider once the conversation is quiet."""
+    return interval if since_use <= ACTIVE_S else interval * QUIET_FACTOR
+
+
+def poll_tick(tick: float, in_use_elsewhere: bool) -> float:
+    """Poll slower when another session's browser does the syncing."""
+    return tick * IN_USE_TICK_FACTOR if in_use_elsewhere else tick
 
 
 def enabled() -> bool:
@@ -64,6 +77,7 @@ class LiveSync:
         self._last_error: str | None = None
         self._failures = 0
         self._synced_wall: float | None = None
+        self._in_use_elsewhere = False
 
     def touch(self) -> None:
         """Note a tool call; starts the background poller on first use."""
@@ -121,7 +135,7 @@ class LiveSync:
     def _poll(self) -> None:
         conn = db_mod.connect(self._db_file)  # this thread's own connection
         try:
-            while not self._stop.wait(self._tick):
+            while not self._stop.wait(poll_tick(self._tick, self._in_use_elsewhere)):
                 self._poll_once(conn)
         finally:
             conn.close()
@@ -139,7 +153,8 @@ class LiveSync:
             return should_sync(now, last_use, self._last_sync, interval, self._idle_after)
         asked = shared is not None and (self._synced_wall is None or shared > self._synced_wall)
         gap_ok = self._last_sync is None or now - self._last_sync >= _MIN_GAP
-        return should_sync(now, last_use, self._last_sync, self._interval, self._idle_after) or (asked and gap_ok)
+        interval = sync_interval(self._interval, now - last_use if last_use is not None else 0.0)
+        return should_sync(now, last_use, self._last_sync, interval, self._idle_after) or (asked and gap_ok)
 
     def _poll_once(self, conn: sqlite3.Connection) -> None:
         from teams_reader.browser.profile_lock import ProfileInUse
@@ -155,11 +170,13 @@ class LiveSync:
                       time.monotonic() - now)
             self._last_error = None
             self._failures = 0
+            self._in_use_elsewhere = False
             self._synced_wall = started_wall
             freshness.mark_synced(conn, started_wall)
         except ProfileInUse as exc:
             self._last_error = str(exc)[:300]
             self._failures += 1
+            self._in_use_elsewhere = True
             _log.info("another session holds the browser and syncs for everyone (%s)", self._last_error[:80])
         except Exception as exc:  # noqa: BLE001 - reported via status(), retried later
             self._last_error = str(exc)[:300]
