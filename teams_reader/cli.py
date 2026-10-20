@@ -144,8 +144,8 @@ def _cmd_wipe(args: argparse.Namespace) -> int:
         print("refusing to wipe without --yes")
         return 1
     db = config.db_path()
-    if db.exists():
-        db.unlink()
+    for path in (db, db.with_name(db.name + "-wal"), db.with_name(db.name + "-shm")):
+        path.unlink(missing_ok=True)
     work_dir = settings.active().work_dir
     if work_dir.exists():
         shutil.rmtree(work_dir)

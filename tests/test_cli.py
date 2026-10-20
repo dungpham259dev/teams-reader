@@ -22,6 +22,9 @@ def test_wipe_requires_yes(capsys):
 def test_wipe_deletes_db_and_work(tmp_path, monkeypatch, capsys):
     db = tmp_path / "store.db"
     db.write_text("data")
+    sidecars = [tmp_path / "store.db-wal", tmp_path / "store.db-shm"]
+    for sidecar in sidecars:
+        sidecar.write_text("journal")
     work = tmp_path / "work"
     work.mkdir()
     (work / "snapshot").mkdir()
@@ -32,6 +35,7 @@ def test_wipe_deletes_db_and_work(tmp_path, monkeypatch, capsys):
     rc = cli.main(["wipe", "--yes"])
     assert rc == 0
     assert not db.exists()
+    assert not any(sidecar.exists() for sidecar in sidecars)  # a stale WAL would replay into the new store
     assert not work.exists()
     assert "wiped" in capsys.readouterr().out
 
