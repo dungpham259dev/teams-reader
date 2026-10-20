@@ -53,6 +53,7 @@ class Profile:
     live_sync: bool = True
     autologin: bool = True
     account: str | None = None
+    load_timeout: int | None = None
     db_override: Path | None = None
 
     @property
@@ -109,7 +110,16 @@ def _from_table(name: str, table: Mapping, default_dir: Path) -> Profile:
         live_sync=bool(table.get("live_sync", True)),
         autologin=bool(table.get("autologin", True)),
         account=str(table["account"]).strip().lower() if table.get("account") else None,
+        load_timeout=_check_load_timeout(table.get("load_timeout"), f"profile {name!r}"),
     )
+
+
+def _check_load_timeout(value: object, where: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ConfigError(f"{where}: load_timeout must be a positive number of seconds, got {value!r}")
+    return value
 
 
 def _apply_env(profile: Profile, environ: Mapping[str, str]) -> Profile:
@@ -224,6 +234,7 @@ def describe(profile: Profile) -> str:
         ("proxy", profile.proxy or "direct"),
         ("credentials", str(profile.credentials_env) if profile.credentials_env else "none (no auto sign-in)"),
         ("live sync", "on" if profile.live_sync else "off"),
+        ("load timeout", f"{profile.load_timeout}s" if profile.load_timeout else "default"),
         ("auto sign-in", "on" if profile.autologin and profile.credentials_env else "off"),
     ]
     return "\n".join(f"{key:>12}: {value}" for key, value in rows)

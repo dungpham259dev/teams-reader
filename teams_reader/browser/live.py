@@ -174,7 +174,9 @@ class PlaywrightSession:
             # A healthy session captures in ~25s; a logged-out one only redirects
             # to sign-in after ~90s, so background opens give up sooner.
             if timeout_ms is None:
-                timeout_ms = 180_000 if interactive else 75_000
+                from teams_reader import settings
+
+                timeout_ms = session.open_timeout_ms(interactive, settings.active().load_timeout)
             self.template_url, self._headers = session.capture_request(
                 self.context, timeout_ms=timeout_ms,
                 autologin=autologin.make_autologin() if interactive else None,

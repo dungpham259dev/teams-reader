@@ -152,7 +152,9 @@ headless browser open and syncs changed chats every ~30s, so new messages show
 up quickly and `sync_history`, `read_image` and `read_link` take seconds. It
 closes after 15 idle minutes. Turn it off with `live_sync = false`. A profile's
 browser serves one process at a time, so CLI browser commands report "in use"
-while the MCP server holds it.
+while the MCP server holds it. On a slow VPN, the first boot after a Teams update
+can outlast the default wait ("Teams did not load"); set `load_timeout = 420`
+(seconds) in the profile.
 
 **Automatic sign-in.** If the profile names a `credentials_env` dotenv file
 (with `email_key`/`password_key`), an expired session is signed in again during

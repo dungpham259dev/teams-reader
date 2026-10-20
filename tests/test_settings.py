@@ -85,6 +85,19 @@ def test_unknown_profile_and_bad_values_fail_clearly(cfg, tmp_path):
 
 
 @pytest.mark.unit
+def test_load_timeout_is_optional_and_validated(cfg, tmp_path):
+    assert settings.load_profile(config_path=cfg, environ={}).load_timeout is None
+    slow = tmp_path / "slow.toml"
+    slow.write_text("[profiles.x]\nload_timeout = 420\n")
+    assert settings.load_profile("x", config_path=slow, environ={}).load_timeout == 420
+    for bad_value in ("0", '"soon"', "-5"):
+        bad = tmp_path / "bad_timeout.toml"
+        bad.write_text(f"[profiles.x]\nload_timeout = {bad_value}\n")
+        with pytest.raises(settings.ConfigError, match="load_timeout"):
+            settings.load_profile("x", config_path=bad, environ={})
+
+
+@pytest.mark.unit
 def test_cache_may_be_an_explicit_leveldb_path(tmp_path):
     path = tmp_path / "c.toml"
     path.write_text('[profiles.x]\ncache = "/some/where.indexeddb.leveldb"\n')

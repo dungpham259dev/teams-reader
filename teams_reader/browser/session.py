@@ -131,6 +131,22 @@ def _clean_headers(raw: dict[str, str]) -> dict[str, str]:
 # Let the SPA boot fully (it fires chatsvc within ~30s on a healthy session);
 # only reload as a last resort, well after that, if nothing has fired.
 _RELOAD_EVERY_MS = 100_000
+# A cold boot over a slow VPN is still downloading at 100s; reloading then throws that away.
+_STALL_MS = 30_000
+_SIGN_IN_TIMEOUT_MS = 180_000
+_BACKGROUND_TIMEOUT_MS = 75_000
+
+
+def should_reload(since_reload_ms: float, idle_ms: float) -> bool:
+    """Reload only when nothing has loaded for a while, never mid-download."""
+    return since_reload_ms >= _RELOAD_EVERY_MS and idle_ms >= _STALL_MS
+
+
+def open_timeout_ms(interactive: bool, load_timeout_s: int | None) -> int:
+    """How long a browser open may take; a profile's load_timeout covers slow networks."""
+    if load_timeout_s:
+        return load_timeout_s * 1000
+    return _SIGN_IN_TIMEOUT_MS if interactive else _BACKGROUND_TIMEOUT_MS
 
 
 def _open(page: Any) -> None:
@@ -169,8 +185,10 @@ def capture_request(
     from teams_reader.browser.live import LoginRequired
 
     captured: dict[str, Any] = {}
+    last_activity = [time.monotonic()]
 
     def on_request(req: Any) -> None:
+        last_activity[0] = time.monotonic()
         url = req.url
         if chatsvc.is_messages_url(url):
             captured.setdefault("messages", req)
@@ -239,7 +257,8 @@ def capture_request(
                 start = time.monotonic()
                 last_reload_ms = 0.0
                 continue
-            if elapsed_ms - last_reload_ms >= _RELOAD_EVERY_MS:
+            idle_ms = (time.monotonic() - last_activity[0]) * 1000
+            if should_reload(elapsed_ms - last_reload_ms, idle_ms):
                 last_reload_ms = elapsed_ms
                 _open(page)
             page.wait_for_timeout(1_000)

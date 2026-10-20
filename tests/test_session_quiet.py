@@ -64,3 +64,21 @@ def test_hidden_browser_without_credentials_needs_an_explicit_login():
     assert session.sign_in_blocker(require_session=True, autologin=object(), can_prompt=True)
     assert session.sign_in_blocker(require_session=False, autologin=object(), can_prompt=False) is None
     assert session.sign_in_blocker(require_session=False, autologin=None, can_prompt=True) is None
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("since_reload_ms,idle_ms,reload", [
+    (100_000, 31_000, True),   # nothing has loaded for a while: reload
+    (100_000, 5_000, False),   # a slow VPN still downloading: let it finish
+    (50_000, 60_000, False),   # stalled, but reloaded too recently
+])
+def test_reload_only_when_the_page_has_stalled(since_reload_ms, idle_ms, reload):
+    assert session.should_reload(since_reload_ms, idle_ms) is reload
+
+
+@pytest.mark.unit
+def test_open_timeout_defaults_and_profile_override():
+    assert session.open_timeout_ms(interactive=True, load_timeout_s=None) == 180_000
+    assert session.open_timeout_ms(interactive=False, load_timeout_s=None) == 75_000
+    assert session.open_timeout_ms(interactive=True, load_timeout_s=420) == 420_000
+    assert session.open_timeout_ms(interactive=False, load_timeout_s=420) == 420_000

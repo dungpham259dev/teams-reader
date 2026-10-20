@@ -21,6 +21,10 @@ cache = "work"
 # Omit for a direct connection.
 # proxy = "socks5://127.0.0.1:1080"
 
+# Seconds a browser open may take (default 180 for sign-in, 75 in the background).
+# Raise it for a slow VPN: the first boot after a Teams update downloads the whole app.
+# load_timeout = 420
+
 # Optional unattended re-login (user-initiated actions only; MFA still needs
 # your phone). A dotenv file with the email and password; omit to log in by hand
 # with `teams-reader --profile work login`.
