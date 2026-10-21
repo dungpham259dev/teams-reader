@@ -118,6 +118,21 @@ def launch_options(headless: bool) -> dict[str, Any]:
     return options
 
 
+def _prune_profile(browser_dir: Path) -> None:
+    from teams_reader import logs
+    from teams_reader.browser import profile_prune
+
+    log = logs.get("browser")
+    try:
+        result = profile_prune.prune(browser_dir)
+    except OSError as exc:  # a full cache only costs disk, never block the launch
+        log.warning("cache prune failed: %s", exc)
+        return
+    for cache in result.removed:
+        log.info("pruned service-worker cache %s (%d MB)", cache.origin or cache.path.name,
+                 cache.size // (1024 * 1024))
+
+
 def launch_context(playwright: Any, headless: bool = False) -> Any:
     """A persistent Chromium context so the Teams login survives between runs."""
     from teams_reader.browser import profile_lock
@@ -127,6 +142,7 @@ def launch_context(playwright: Any, headless: bool = False) -> Any:
     options = launch_options(headless)
     try:
         profile.browser_dir.mkdir(parents=True, exist_ok=True)
+        _prune_profile(profile.browser_dir)
         context = playwright.chromium.launch_persistent_context(
             user_data_dir=str(profile.browser_dir), **options
         )
